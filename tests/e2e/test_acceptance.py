@@ -14,12 +14,6 @@ import pytest
 
 from conftest import DEMO_SOURCE, tree_digest
 
-# Changes A–D were approved on 2026-10-23 and are implemented by Codex 1/2.
-# strict=True: once a change lands these XPASS and fail. That's the signal to remove the marker.
-pending_A = pytest.mark.xfail(strict=True, reason="Change A: popular_feed must be a code change via demo_app/ranking.py")
-pending_B = pytest.mark.xfail(strict=True, reason="Change B: sprout accepts optional parent_id")
-pending_C = pytest.mark.xfail(strict=True, reason="Change C: Timeline exposes `modification`")
-pending_D = pytest.mark.xfail(strict=True, reason="Change D: app_url is absolute")
 
 
 # 1–6: the hackathon demo, end to end -------------------------------------------------
@@ -279,9 +273,8 @@ def test_embedded_app_uses_relative_urls_through_proxy(fork):
     assert fork.http.get("/app/api/health").status_code == 200
 
 
-# Approved changes A–D (expected failures until the Codex branches land) -------------------
+# Approved changes A–D -------------------------------------------------------------------
 
-@pending_A
 def test_A_modification_is_a_code_change_not_config(fork):
     root = fork.root_id()
     source = (DEMO_SOURCE / "ranking.py").read_text()
@@ -304,7 +297,6 @@ def test_A_modification_is_a_code_change_not_config(fork):
     assert (DEMO_SOURCE / "ranking.py").read_text() == source
 
 
-@pending_B
 def test_B_sprout_from_non_active_parent(fork):
     root = fork.root_id()
     fork.sprout("child")
@@ -315,17 +307,15 @@ def test_B_sprout_from_non_active_parent(fork):
     assert "child only" not in fork.contents()
 
 
-@pending_C
 def test_C_timeline_exposes_modification(fork):
     root = fork.root_id()
     assert fork.timelines()[root]["modification"] is None
     child = fork.sprout("Popular feed")
     assert child["modification"] == "popular_feed"
     plain = fork.sprout("plain", modification="none")
-    assert plain["modification"] in (None, "none")
+    assert plain["modification"] == "none"
 
 
-@pending_D
 def test_D_app_url_is_absolute_and_serves_the_app(fork):
     url = fork.listing()["app_url"]
     assert url.startswith("http://") or url.startswith("https://")

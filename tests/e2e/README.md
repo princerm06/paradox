@@ -4,5 +4,5 @@ These start a real engine process (`engine.api.create_app`) on free ports with a
 
     .venv/bin/pytest tests/e2e -q -rxX
 
-`test_A_*` … `test_D_*` are `xfail(strict=True)` until approved changes A–D land. When one starts passing (XPASS), the suite fails on purpose: remove that marker.
+`test_A_*` … `test_D_*` cover approved changes A–D (code-level modification, sprout `parent_id`, `modification` field, absolute `app_url`).
 The tests read the documented `workspace/code/demo_app/` layout only to prove the change is in the code, not in config.
