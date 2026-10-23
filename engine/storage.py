@@ -34,7 +34,7 @@ class Storage:
             CREATE TABLE IF NOT EXISTS timelines (
                 id TEXT PRIMARY KEY, parent_id TEXT REFERENCES timelines(id),
                 name TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
-                snapshot_id TEXT
+                snapshot_id TEXT, modification TEXT
             );
             CREATE TABLE IF NOT EXISTS snapshots (
                 id TEXT PRIMARY KEY, timeline_id TEXT NOT NULL REFERENCES timelines(id),
@@ -42,6 +42,10 @@ class Storage:
             );
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """)
+        columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(timelines)")}
+        if "modification" not in columns:
+            with self.connection:
+                self.connection.execute("ALTER TABLE timelines ADD COLUMN modification TEXT")
 
     def setting(self, key):
         row = self.connection.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -56,16 +60,16 @@ class Storage:
             raise KeyError("Timeline not found")
         return dict(row)
 
-    def create_timeline(self, name, parent_id=None, timeline_id=None):
+    def create_timeline(self, name, parent_id=None, timeline_id=None, modification=None):
         timeline_id = timeline_id or str(uuid4())
         with self.connection:
             self.connection.execute(
-                "INSERT INTO timelines VALUES (?,?,?,?,?,NULL)",
-                (timeline_id, parent_id, name, "pending" if parent_id else "confirmed", now()),
+                "INSERT INTO timelines (id,parent_id,name,status,created_at,snapshot_id,modification) VALUES (?,?,?,?,?,NULL,?)",
+                (timeline_id, parent_id, name, "pending" if parent_id else "confirmed", now(), modification),
             )
         return timeline_id
 
-    def snapshot(self, timeline_id):
+    def snapshot(self, timeline_id, update_head=True):
         snapshot_id = str(uuid4())
         temporary = self.snapshots / (snapshot_id + ".tmp")
         destination = self.snapshots / snapshot_id
@@ -83,7 +87,8 @@ class Storage:
             record = {"id": snapshot_id, "timeline_id": timeline_id, "created_at": now()}
             with self.connection:
                 self.connection.execute("INSERT INTO snapshots VALUES (:id,:timeline_id,:created_at)", record)
-                self.connection.execute("UPDATE timelines SET snapshot_id=? WHERE id=?", (snapshot_id, timeline_id))
+                if update_head:
+                    self.connection.execute("UPDATE timelines SET snapshot_id=? WHERE id=?", (snapshot_id, timeline_id))
             return record
         finally:
             if temporary.exists():

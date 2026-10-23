@@ -114,7 +114,7 @@ class Engine:
         finally:
             self.runtime.start()
 
-    def transition(self, target_id=None, snapshot_id=None, name=None, modification="none", decline_id=None):
+    def transition(self, target_id=None, snapshot_id=None, name=None, modification="none", decline_id=None, parent_id=None):
         previous_id = self.active_id
         child_id = str(uuid4()) if name is not None else None
         self.runtime.stop()
@@ -127,22 +127,28 @@ class Engine:
             self.storage.set_setting("transition", json.dumps({"snapshot_id": outgoing["id"], "child_id": child_id}))
         try:
             if name is not None:
-                self.storage.create_timeline(name, previous_id, child_id)
+                parent_id = previous_id if parent_id is None else parent_id
+                parent_snapshot = outgoing["id"] if parent_id == previous_id else self.storage.timeline(parent_id)["snapshot_id"]
+                self.storage.create_timeline(name, parent_id, child_id, modification=modification)
                 target_id = child_id
-                self.storage.restore(outgoing["id"])
+                self.storage.restore(parent_snapshot)
                 if modification == "popular_feed":
-                    behavior = self.storage.workspace / "state" / "behavior.json"
-                    config = json.loads(behavior.read_text())
-                    config["feed_order"] = "popular"
-                    behavior.write_text(json.dumps(config))
+                    ranking = self.storage.workspace / "code" / "demo_app" / "ranking.py"
+                    if not ranking.is_file():
+                        raise ValueError("Demo source must expose demo_app/ranking.py")
+                    template = Path(__file__).with_name("templates") / "popular_ranking.py"
+                    ranking.write_bytes(template.read_bytes())
             else:
                 self.storage.restore(snapshot_id or self.storage.timeline(target_id)["snapshot_id"])
             self.runtime.start()
+            restored_snapshot = None
             if child_id or snapshot_id:
                 self.runtime.stop()
-                self.storage.snapshot(target_id)
+                restored_snapshot = self.storage.snapshot(target_id, update_head=False)
                 self.runtime.start()
             with self.storage.connection:
+                if restored_snapshot:
+                    self.storage.connection.execute("UPDATE timelines SET snapshot_id=? WHERE id=?", (restored_snapshot["id"], target_id))
                 self.storage.set_setting("active_id", target_id)
                 if decline_id:
                     self.storage.connection.execute("UPDATE timelines SET status='declined' WHERE id=?", (decline_id,))
@@ -171,9 +177,10 @@ class Engine:
             return self.view(timeline_id)
         return self.transition(target_id=timeline_id)
 
-    def sprout(self, name, modification):
-        self.require_available(self.active_id)
-        return self.transition(name=name, modification=modification)
+    def sprout(self, name, modification, parent_id=None):
+        parent_id = self.active_id if parent_id is None else parent_id
+        self.require_available(parent_id)
+        return self.transition(name=name, modification=modification, parent_id=parent_id)
 
     def decide(self, timeline_id, status):
         timeline = self.storage.timeline(timeline_id)
