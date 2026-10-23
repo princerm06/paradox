@@ -29,6 +29,7 @@ class Runtime:
             return
         listener = socket.socket()
         try:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", self.port))
             listener.listen(128)
             self.port = listener.getsockname()[1]
