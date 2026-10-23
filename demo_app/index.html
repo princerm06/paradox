@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paradox Demo Feed</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #202432; background: #f7f8fc; }
+    h1 { margin-bottom: 8px; } #ordering { color: #626878; }
+    form, article { padding: 20px; background: white; border: 1px solid #dde1ec; border-radius: 12px; margin: 16px 0; }
+    label { display: block; margin: 12px 0; } input, textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px; font: inherit; }
+    button { cursor: pointer; padding: 8px 14px; border-radius: 6px; border: 1px solid #adb7d5; background: #eef1ff; color: #263b82; }
+    button:disabled { opacity: .6; cursor: wait; } article p { white-space: pre-wrap; overflow-wrap: anywhere; } small { color: #626878; } #error { color: #a32424; }
+  </style>
+</head>
+<body>
+  <h1>The Feed</h1>
+  <p id="ordering">Loading timeline behavior…</p>
+  <form id="compose">
+    <label>Your name<input name="author" required maxlength="80" value="Explorer"></label>
+    <label>Post<textarea name="content" required maxlength="2000" rows="3"></textarea></label>
+    <button type="submit">Publish post</button>
+  </form>
+  <p id="error" role="alert"></p>
+  <main id="posts" aria-live="polite"></main>
+  <script>
+    const errorElement = document.querySelector('#error');
+    async function request(path, options = {}) {
+      const response = await fetch(path, { cache: 'no-store', ...options });
+      if (!response.ok) throw new Error(`Request failed (${response.status})`);
+      return response.json();
+    }
+    async function refresh() {
+      const feed = await request('api/posts');
+      document.querySelector('#ordering').textContent = `Ordering: ${feed.ordering}`;
+      const articles = feed.posts.map(post => {
+        const article = document.createElement('article');
+        const author = document.createElement('strong');
+        author.textContent = post.author;
+        const content = document.createElement('p');
+        content.textContent = post.content;
+        const timestamp = document.createElement('small');
+        timestamp.textContent = new Date(post.created_at).toLocaleString();
+        const like = document.createElement('button');
+        like.textContent = `♥ ${post.likes}`;
+        like.style.marginLeft = '12px';
+        like.addEventListener('click', () => perform(like, async () => {
+          await request(`api/posts/${post.id}/like`, { method: 'POST' });
+          await refresh();
+        }));
+        article.append(author, content, timestamp, like);
+        return article;
+      });
+      document.querySelector('#posts').replaceChildren(...articles);
+    }
+    async function perform(button, action) {
+      errorElement.textContent = '';
+      button.disabled = true;
+      try { await action(); } catch (error) { errorElement.textContent = error.message; }
+      finally { button.disabled = false; }
+    }
+    document.querySelector('#compose').addEventListener('submit', event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      perform(form.querySelector('button'), async () => {
+        await request('api/posts', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ author: form.elements.author.value, content: form.elements.content.value })
+        });
+        form.elements.content.value = '';
+        await refresh();
+      });
+    });
+    refresh().catch(error => { errorElement.textContent = error.message; });
+  </script>
+</body>
+</html>
