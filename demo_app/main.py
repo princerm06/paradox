@@ -1,4 +1,3 @@
-import json
 import os
 import sqlite3
 from contextlib import asynccontextmanager, contextmanager
@@ -9,6 +8,8 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, constr
+
+from demo_app import ranking
 
 
 class NewPost(BaseModel):
@@ -70,14 +71,8 @@ def create_app(app_dir: Optional[Path] = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         state_dir.mkdir(parents=True, exist_ok=True)
-        behavior_path = state_dir / "behavior.json"
-        if not behavior_path.exists():
-            behavior_path.write_bytes(Path(__file__).with_name("behavior.json").read_bytes())
-        behavior = json.loads(behavior_path.read_text(encoding="utf-8"))
-        ordering = behavior.get("feed_order")
-        if ordering not in {"chronological", "popular"}:
-            raise ValueError("behavior.json feed_order must be chronological or popular")
-        application.state.ordering = ordering
+        if ranking.ORDERING not in {"chronological", "popular"}:
+            raise ValueError("ranking.ORDERING must be chronological or popular")
         initialize_database(database_path)
         yield
 
@@ -92,17 +87,13 @@ def create_app(app_dir: Optional[Path] = None) -> FastAPI:
     def health():
         with database(database_path) as connection:
             connection.execute("SELECT 1 FROM posts LIMIT 1").fetchone()
-        return {"status": "ok", "ordering": application.state.ordering}
+        return {"status": "ok", "ordering": ranking.ORDERING}
 
     @application.get("/api/posts", response_model=Feed)
     def list_posts():
-        ordering = application.state.ordering
-        order_clause = "created_at DESC, id DESC"
-        if ordering == "popular":
-            order_clause = "likes DESC, created_at DESC, id DESC"
         with database(database_path) as connection:
-            posts = connection.execute("SELECT * FROM posts ORDER BY " + order_clause).fetchall()
-        return {"posts": [dict(post) for post in posts], "ordering": ordering}
+            posts = [dict(post) for post in connection.execute("SELECT * FROM posts").fetchall()]
+        return {"posts": ranking.rank(posts), "ordering": ranking.ORDERING}
 
     @application.post("/api/posts", response_model=Post, status_code=201)
     def create_post(post: NewPost):

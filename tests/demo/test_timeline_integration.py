@@ -47,12 +47,16 @@ def contents(client):
     return {post['content'] for post in feed(client)['posts']}
 
 
-def test_parent_child_sibling_traversal_isolates_behavior_and_data(client):
+def test_parent_child_sibling_traversal_isolates_behavior_and_data(client, tmp_path):
     root_id = client.get('/api/timelines').json()['active_timeline_id']
+    ranking_path = tmp_path / 'workspace' / 'code' / 'demo_app' / 'ranking.py'
+    original_ranking = ranking_path.read_bytes()
     baseline = feed(client)
     assert baseline['ordering'] == 'chronological'
     shared = publish(client, 'Before the fork')
     child = sprout(client, 'Popular future')
+    popular_ranking = ranking_path.read_bytes()
+    assert popular_ranking != original_ranking
     assert child['parent_id'] == root_id
     assert child['status'] == 'pending'
     popular = feed(client)
@@ -62,6 +66,7 @@ def test_parent_child_sibling_traversal_isolates_behavior_and_data(client):
     child_post = publish(client, 'Child only')
     assert client.post(f"/app/api/posts/{child_post['id']}/like").json()['likes'] == 1
     activate(client, root_id)
+    assert ranking_path.read_bytes() == original_ranking
     assert feed(client)['ordering'] == 'chronological'
     assert 'Child only' not in contents(client)
     publish(client, 'Parent after fork')
@@ -71,6 +76,7 @@ def test_parent_child_sibling_traversal_isolates_behavior_and_data(client):
     assert 'Parent after fork' in contents(client)
     publish(client, 'Sibling only')
     activate(client, child['id'])
+    assert ranking_path.read_bytes() == popular_ranking
     assert feed(client)['ordering'] == 'popular'
     assert 'Child only' in contents(client)
     assert 'Parent after fork' not in contents(client)
@@ -139,8 +145,8 @@ def test_code_html_and_database_restore_together(client, tmp_path):
     code_dir = tmp_path / 'workspace' / 'code' / 'demo_app'
     source_path = code_dir / 'main.py'
     source = source_path.read_text()
-    old_return = 'return {"status": "ok", "ordering": application.state.ordering}'
-    new_return = 'return {"status": "future-ok", "ordering": application.state.ordering}'
+    old_return = 'return {"status": "ok", "ordering": ranking.ORDERING}'
+    new_return = 'return {"status": "future-ok", "ordering": ranking.ORDERING}'
     assert old_return in source
     source_path.write_text(source.replace(old_return, new_return))
     (code_dir / 'index.html').write_text(original_page.replace('The Feed', 'The Future Feed'))

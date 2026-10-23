@@ -1,10 +1,10 @@
-import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
 
+from demo_app import ranking
 from demo_app.main import create_app
 
 
@@ -48,8 +48,12 @@ def test_create_and_like_persist_across_restart(tmp_path):
     assert not (tmp_path / 'app.sqlite3-wal').exists()
 
 
-def test_popular_order_and_deterministic_ties(tmp_path):
-    (tmp_path / 'behavior.json').write_text(json.dumps({'feed_order': 'popular'}))
+def test_popular_order_and_deterministic_ties(tmp_path, monkeypatch):
+    def popular_rank(posts):
+        return sorted(posts, key=lambda post: (post['likes'], post['created_at'], post['id']), reverse=True)
+
+    monkeypatch.setattr(ranking, 'ORDERING', 'popular')
+    monkeypatch.setattr(ranking, 'rank', popular_rank)
     with TestClient(create_app(tmp_path)) as client:
         feed = client.get('/api/posts').json()
         assert feed['ordering'] == 'popular'
@@ -90,11 +94,34 @@ def test_concurrent_likes_do_not_lose_updates(client):
     assert next(post for post in posts if post['id'] == 1)['likes'] == 28
 
 
-def test_invalid_behavior_fails_readiness(tmp_path):
-    (tmp_path / 'behavior.json').write_text('{"feed_order":"unexpected"}')
-    with pytest.raises(ValueError, match='feed_order'):
+def test_invalid_ranking_fails_readiness(tmp_path, monkeypatch):
+    monkeypatch.setattr(ranking, 'ORDERING', 'unexpected')
+    with pytest.raises(ValueError, match='ranking.ORDERING'):
         with TestClient(create_app(tmp_path)):
             pass
+
+
+def test_legacy_behavior_file_cannot_select_popularity(tmp_path):
+    (tmp_path / 'behavior.json').write_text('{"feed_order":"popular"}')
+    with TestClient(create_app(tmp_path)) as client:
+        feed = client.get('/api/posts').json()
+        assert feed['ordering'] == 'chronological'
+        assert [post['id'] for post in feed['posts']] == [2, 1]
+
+
+def test_feed_delegates_all_ordering_to_ranking(client, monkeypatch):
+    calls = []
+
+    def reverse_ids(posts):
+        calls.append(posts)
+        return sorted(posts, key=lambda post: post['id'])
+
+    monkeypatch.setattr(ranking, 'rank', reverse_ids)
+    feed = client.get('/api/posts').json()
+    assert [post['id'] for post in feed['posts']] == [1, 2]
+    assert len(calls) == 1
+    assert all(isinstance(post, dict) for post in calls[0])
+    assert feed['ordering'] == ranking.ORDERING
 
 
 def test_distinct_state_directories_are_isolated(tmp_path):
