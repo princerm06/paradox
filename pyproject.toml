@@ -16,8 +16,8 @@ test = ["pytest>=8,<9"]
 include = ["engine*", "demo_app*"]
 
 [tool.setuptools.package-data]
-demo_app = ["*.json", "*.html", "static/*"]
-engine = ["templates/*.py"]
+demo_app = ["*.json", "*.html", "*.md", "static/*"]
+engine = ["templates/*.py", "droid_adapter/package*.json", "droid_adapter/tsconfig.json", "droid_adapter/src/*.ts", "droid_adapter/README.md", "droid_adapter/dist/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

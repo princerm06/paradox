@@ -1,0 +1,22 @@
+{
+  "name": "paradox-droid-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node subprocess adapter that runs Factory Droid through the official @factory/droid-sdk for the Paradox engine.",
+  "type": "module",
+  "main": "dist/adapter.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/adapter.test.js"
+  },
+  "dependencies": {
+    "@factory/droid-sdk": "0.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "typescript": "5.9.3"
+  }
+}

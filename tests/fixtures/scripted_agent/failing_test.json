@@ -1,0 +1,8 @@
+{
+  "match": "failing test",
+  "delay_s": 0,
+  "summary": "Intentional failing feature test: demonstrate test-stage rejection with valid Python source.",
+  "files": {
+    "demo_app/tests/test_generated_failure.py": "def test_generated_intentional_failure():\n    assert False, \"Intentional scripted failure: this future must not be adopted\"\n"
+  }
+}
