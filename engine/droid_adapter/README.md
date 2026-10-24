@@ -134,11 +134,12 @@ requests, and unknown types. Each decision is logged.
 
 ## Known limitations
 
-- **Live authentication has not been validated.** No `FACTORY_API_KEY` or
-  `droid` CLI was available during development. The tests mock
-  `createSession`, so nothing confirms that a real CLI asks the handler for
-  every edit under `AutonomyLevel.Off`. The SDK docs only say that Off means
-  "Ask before every action".
+- **Mocked tests are not live-generation proof.** For exact official SDK
+  integration points, current evidence, and the one-call HTTP reproduction
+  tool, see `VERIFICATION.md`. The original implementation was built without
+  a CLI/key; availability now probes installed prerequisites but does not make
+  a paid authentication check. A successful session alone does not prove that
+  every CLI operation is constrained by the permission handler.
 - **The tool block is subtractive only.** The public SDK has no allowlist (the
   docs say so explicitly). A tool introduced by a newer `droid` CLI that is not
   in `DISABLED_TOOL_IDS` is not disabled. If it asks for permission, the handler

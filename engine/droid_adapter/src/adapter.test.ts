@@ -8,6 +8,7 @@ import {
   type AdapterMessage,
   DISABLED_TOOL_IDS,
   EXIT_BAD_INPUT,
+  EXIT_INTERRUPTED,
   EXIT_OK,
   EXIT_RUN_FAILED,
   type PermissionRequest,
@@ -248,6 +249,34 @@ describe('runAdapter', () => {
     assert.equal(result.session_id, null);
     assert.ok(!result.summary.includes('fk-test-key'));
     assert.ok(h.diagnostics.every((line) => !line.includes('fk-test-key')));
+  });
+
+  it('reports cancellation and closes an established SDK session', async () => {
+    const h = harness([]);
+    const controller = new AbortController();
+    h.deps.abortSignal = controller.signal;
+    h.deps.createSession = async () => ({
+      id: 'cancelled-session',
+      async *stream() {
+        controller.abort();
+        throw new Error('operation aborted');
+      },
+      async close() { h.captured.closed = true; },
+    } as unknown as FakeSession);
+    assert.equal(await runAdapter(input, h.deps), EXIT_INTERRUPTED);
+    assert.equal(h.captured.closed, true);
+    assert.deepEqual(h.emitted.at(-1), {
+      type: 'result', exit_code: 130, session_id: 'cancelled-session',
+      summary: 'Droid run aborted', usage: { input_tokens: null, output_tokens: null, factory_credits: null },
+    });
+  });
+
+  it('fails closed if the SDK stream ends without a result', async () => {
+    const h = harness([{ type: 'assistant', text: 'partial work' }]);
+    assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
+    assert.equal(h.captured.closed, true);
+    assert.equal(h.emitted.filter((message) => message.type === 'result').length, 1);
+    assert.equal((h.emitted.at(-1) as { summary: string }).summary, 'Droid stream ended without a result');
   });
 });
 

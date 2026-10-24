@@ -1,11 +1,12 @@
 import json
+import math
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import time
 
-from engine.jobs import log_line, scrubbed_environment
+from engine.jobs import log_line, redact, scrubbed_environment
 
 
 ADAPTER = Path(__file__).with_name("droid_adapter") / "dist" / "adapter.js"
@@ -32,10 +33,16 @@ class Providers:
             else:
                 try:
                     version = subprocess.run([shutil.which("node"), "--version"], capture_output=True, timeout=5, env=scrubbed_environment())
+                    if version.returncode:
+                        return {"id": provider, "available": False, "reason": "Node.js version probe failed"}
                     if int(version.stdout.decode().strip().lstrip("v").split(".")[0]) < 20:
                         return {"id": provider, "available": False, "reason": "Droid SDK adapter requires Node.js >=20"}
                     probe = subprocess.run([shutil.which("node"), str(ADAPTER), "--probe"], capture_output=True, timeout=10, env=scrubbed_environment())
-                    if probe.returncode:
+                    report = json.loads(probe.stdout)
+                    if not isinstance(report, dict) or not all(report.get(key) is True for key in ("ok", "sdk", "droid_cli")):
+                        detail = report.get("detail") if isinstance(report, dict) else None
+                        reason = "Droid SDK adapter probe failed" + (": " + redact(detail)[:500] if isinstance(detail, str) else "")
+                    elif probe.returncode:
                         reason = "Droid SDK adapter dependencies are unavailable; run npm ci && npm run build"
                 except (OSError, ValueError, subprocess.TimeoutExpired):
                     reason = "Droid SDK adapter probe failed"
@@ -47,6 +54,8 @@ class Providers:
         return {"default": self.default, "providers": [self.availability(name) for name in ("droid", "scripted", "claude")]}
 
     def run(self, provider, prompt, code, control, log):
+        if provider not in {"scripted", "droid"}:
+            raise ValueError("Unknown or disabled agent provider: " + provider)
         started = time.monotonic()
         if provider == "scripted":
             recipe = None
@@ -92,11 +101,37 @@ class Providers:
                         event = json.loads(line)
                     except ValueError:
                         continue
-                    if event.get("type") == "result":
-                        result = {key: event.get(key) for key in ("exit_code", "session_id", "summary", "usage")}
+                    if isinstance(event, dict) and event.get("type") == "result":
+                        if result is not None:
+                            raise RuntimeError("Droid SDK adapter emitted multiple results")
+                        result = self.adapter_result(event)
             if result is None:
                 raise RuntimeError(f"Droid SDK adapter produced no result (exit {exit_code})")
             if exit_code:
                 result["exit_code"] = exit_code
         result["duration_ms"] = round((time.monotonic() - started) * 1000)
         return result
+
+    @staticmethod
+    def adapter_result(event):
+        exit_code = event.get("exit_code")
+        session_id = event.get("session_id")
+        summary = event.get("summary")
+        usage = event.get("usage")
+        if type(exit_code) is not int or exit_code < 0:
+            raise RuntimeError("Droid SDK adapter result has an invalid exit_code")
+        if session_id is not None and not isinstance(session_id, str):
+            raise RuntimeError("Droid SDK adapter result has an invalid session_id")
+        if exit_code == 0 and not session_id:
+            raise RuntimeError("Successful Droid SDK adapter result has no session_id")
+        if summary is not None and not isinstance(summary, str):
+            raise RuntimeError("Droid SDK adapter result has an invalid summary")
+        if not isinstance(usage, dict):
+            raise RuntimeError("Droid SDK adapter result has invalid usage")
+        normalized_usage = {}
+        for key in ("input_tokens", "output_tokens", "factory_credits"):
+            value = usage.get(key)
+            if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value < 0):
+                raise RuntimeError("Droid SDK adapter result has invalid " + key)
+            normalized_usage[key] = value
+        return {"exit_code": exit_code, "session_id": session_id, "summary": redact(summary) if summary is not None else None, "usage": normalized_usage}
