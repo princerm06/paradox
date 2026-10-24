@@ -190,7 +190,7 @@ function generationById(id) {
 
 function ghostNodes() {
   return state.generations
-    .filter((generation) => generation.status !== "succeeded")
+    .filter((generation) => generation.status !== "succeeded" || !byId(generation.timeline_id))
     .map((generation) => ({
       id: generation.id,
       parent_id: generation.parent_id,
@@ -231,10 +231,55 @@ function preferredProvider() {
 }
 
 function upsertGeneration(record) {
-  if (!record || !record.id) return;
+  if (!record || !record.id) return null;
   const index = state.generations.findIndex((item) => item.id === record.id);
+  const previous = state.generations[index];
+  if (previous && (previous.updated_at > record.updated_at || (isTerminalGeneration(previous.status) && !isTerminalGeneration(record.status)))) return previous;
   if (index === -1) state.generations.unshift(record);
   else state.generations[index] = record;
+  return record;
+}
+
+const generationCompletions = new Map();
+
+async function reconcileGeneration(record) {
+  const previous = generationById(record.id);
+  const next = upsertGeneration(record);
+  if (!isTerminalGeneration(next.status)) return next;
+  if (generationCompletions.has(next.id)) {
+    await generationCompletions.get(next.id);
+    return generationById(next.id);
+  }
+  const completed = previous && !isTerminalGeneration(previous.status);
+  const needsTimeline = next.status === "succeeded" && !byId(next.timeline_id);
+  if (!completed && !needsTimeline) return next;
+  const completion = (async () => {
+    if (next.status === "succeeded") {
+      const refreshed = needsTimeline ? await refreshTimelines({ quiet: true }) : true;
+      if (state.selectedGenerationId === next.id && byId(next.timeline_id)) {
+        state.selectedGenerationId = null;
+        state.selectedId = next.timeline_id;
+        state.panToId = next.timeline_id;
+        ensureSnapshot(next.timeline_id);
+      }
+      if (completed) note(refreshed ? "success" : "error", refreshed
+        ? `“${next.name}” passed validation.${next.activate_on_success ? " It is now live." : " The live runtime was left unchanged."}`
+        : `“${next.name}” succeeded, but the timeline list could not be refreshed.`);
+    } else if (completed && next.status === "failed") {
+      note("error", `“${next.name}” failed during ${next.error?.stage || "generation"}: ${next.error?.message || "Generation failed."}`);
+    } else if (completed) {
+      note("info", `“${next.name}” was cancelled. No timeline was created.`);
+    }
+    if (viewingGeneration(next.id) && !state.inspectionBusy[next.id]) ensureInspection(next.id, true);
+    renderNow();
+  })();
+  generationCompletions.set(next.id, completion);
+  try {
+    await completion;
+  } finally {
+    generationCompletions.delete(next.id);
+  }
+  return next;
 }
 
 function ancestry(id) {
@@ -482,18 +527,31 @@ function layoutTimelines(timelines) {
 function applyTimelineList(data, { fromMutation = false } = {}) {
   const previousActive = state.activeTimelineId;
   const previousUrl = state.appUrl;
-  state.timelines = Array.isArray(data.timelines) ? data.timelines : [];
+  const incoming = Array.isArray(data.timelines) ? data.timelines : [];
+  const changedSnapshots = incoming.filter((timeline) => byId(timeline.id)?.snapshot_id !== timeline.snapshot_id).map((timeline) => timeline.id);
+  state.timelines = incoming;
+  for (const id of changedSnapshots) {
+    state.snapshotToken[id] = (state.snapshotToken[id] || 0) + 1;
+    delete state.snapshotStatus[id];
+    delete state.snapshotsById[id];
+  }
   state.activeTimelineId = data.active_timeline_id || null;
   state.appUrl = typeof data.app_url === "string" ? data.app_url : "";
   state.listError = null;
   if (state.selectedGenerationId) {
     const ghost = generationById(state.selectedGenerationId);
-    if (!ghost || ghost.status === "succeeded") state.selectedGenerationId = null;
+    if (!ghost) state.selectedGenerationId = null;
+    else if (ghost.status === "succeeded" && byId(ghost.timeline_id)) {
+      state.selectedGenerationId = null;
+      state.selectedId = ghost.timeline_id;
+      state.panToId = ghost.timeline_id;
+    }
   }
   if (!state.selectedGenerationId && (!state.selectedId || !byId(state.selectedId))) state.selectedId = state.activeTimelineId;
   const changed = previousActive !== state.activeTimelineId || (previousUrl && previousUrl !== state.appUrl);
   if (changed && !fromMutation && state.bootstrapped) bumpPreview();
   if (!state.didFitOnce && state.timelines.length) state.needsFit = true;
+  if (changedSnapshots.includes(state.selectedId)) ensureSnapshot(state.selectedId);
 }
 
 function mergeTimeline(timeline) {
@@ -529,15 +587,24 @@ async function refreshHealth({ quiet = false } = {}) {
   if (!quiet) renderNow();
 }
 
+function healthSignature() {
+  return `${state.connected}|${state.health?.status}|${state.health?.runtime_running}|${state.health?.active_timeline_id}|${state.healthError || ""}`;
+}
+
+let timelineReadToken = 0;
+
 async function refreshTimelines({ quiet = false, fromMutation = false } = {}) {
+  const token = ++timelineReadToken;
   state.loadingTimelines = !state.timelines.length;
   let ok = false;
   try {
     const data = await api.timelines();
+    if (token !== timelineReadToken) return true;
     applyTimelineList(data, { fromMutation });
     state.connected = true;
     ok = true;
   } catch (error) {
+    if (token !== timelineReadToken) return true;
     if (error.name === "AbortError") return false;
     state.listError = error.message || "Timelines could not be loaded.";
     if (error.status === 0) state.connected = false;
@@ -602,11 +669,11 @@ async function refreshAgents({ quiet = false } = {}) {
 async function refreshGenerations({ quiet = false } = {}) {
   try {
     const data = await api.generations();
-    state.generations = data && Array.isArray(data.generations) ? data.generations : [];
+    for (const record of data && Array.isArray(data.generations) ? data.generations : []) await reconcileGeneration(record);
     state.generationsError = null;
     if (state.selectedGenerationId) {
       const ghost = generationById(state.selectedGenerationId);
-      if (!ghost || ghost.status === "succeeded") {
+      if (!ghost || (ghost.status === "succeeded" && byId(ghost.timeline_id))) {
         const timelineId = ghost && ghost.timeline_id;
         state.selectedGenerationId = null;
         if (timelineId && byId(timelineId)) state.selectedId = timelineId;
@@ -640,23 +707,26 @@ function ensureInspection(id, force = false) {
   if (!id) return;
   const existing = state.inspections[id];
   const known = generationById(id);
-  if (!force && existing && existing.record && known && existing.record.updated_at === known.updated_at && isTerminalGeneration(known.status)) return;
+  if (!force && existing && !existing.error && existing.record && known && existing.record.updated_at === known.updated_at && isTerminalGeneration(known.status)) return;
   const token = (inspectionTokens[id] || 0) + 1;
+  let refreshAfter = false;
   inspectionTokens[id] = token;
   state.inspectionBusy[id] = true;
-  Promise.all([
+  Promise.allSettled([
     api.generation(id),
     api.generationLogs(id, "agent", 200),
     api.generationLogs(id, "validation", 200),
     api.generationDiff(id),
-  ]).then(([record, agent, validation, diff]) => {
+  ]).then(async (results) => {
     if (inspectionTokens[id] !== token) return;
-    const local = generationById(id);
-    const chosen = local && local.updated_at > record.updated_at ? local : record;
-    const next = { record: chosen, agent, validation, diff: diff || "", error: null };
+    const [record, agent, validation, diff] = results.map((result, index) => result.status === "fulfilled" ? result.value : [existing?.record, existing?.agent, existing?.validation, existing?.diff][index]);
+    const chosen = record ? await reconcileGeneration(record) : generationById(id);
+    if (inspectionTokens[id] !== token) return;
+    refreshAfter = isTerminalGeneration(chosen?.status) && (!isTerminalGeneration(known?.status) || known.updated_at !== chosen.updated_at);
+    const errors = results.flatMap((result, index) => result.status === "rejected" ? [`${["Generation", "Agent logs", "Validation logs", "Diff"][index]}: ${result.reason.message}`] : []);
+    const next = { record: chosen, agent, validation, diff: diff || "", error: errors.join(" ") || null };
     const changed = inspectionSignature(state.inspections[id]) !== inspectionSignature(next);
     state.inspections[id] = next;
-    upsertGeneration(chosen);
     if (changed && viewingGeneration(id)) renderInspector();
   }).catch((error) => {
     if (inspectionTokens[id] !== token) return;
@@ -666,7 +736,10 @@ function ensureInspection(id, force = false) {
     };
     if (viewingGeneration(id)) renderInspector();
   }).finally(() => {
-    if (inspectionTokens[id] === token) state.inspectionBusy[id] = false;
+    if (inspectionTokens[id] === token) {
+      state.inspectionBusy[id] = false;
+      if (refreshAfter) ensureInspection(id, true);
+    }
   });
 }
 
@@ -701,31 +774,9 @@ async function pollActiveGenerations() {
       const moved = next.status !== current.status || next.updated_at !== current.updated_at || next.timeline_id !== current.timeline_id;
       if (moved) {
         changed = true;
-        upsertGeneration(next);
       }
-      if (next.status === "succeeded" && current.status !== "succeeded") {
-        const wasSelected = state.selectedGenerationId === next.id;
-        const ok = await refreshTimelines({ quiet: true });
-        const created = next.timeline_id ? byId(next.timeline_id) : null;
-        if (!ok) note("error", `“${next.name}” succeeded, but the timeline list could not be refreshed.`);
-        else if (created && created.is_active) note("success", `“${next.name}” is now the live runtime.`);
-        else note("success", `“${next.name}” passed validation and is pending. The live runtime was left unchanged.`);
-        if (wasSelected && next.timeline_id) {
-          state.selectedGenerationId = null;
-          state.selectedId = next.timeline_id;
-          state.panToId = next.timeline_id;
-          ensureSnapshot(next.timeline_id);
-        }
-        ensureInspection(next.id, true);
-      } else if (next.status === "failed" && current.status !== "failed") {
-        const stage = next.error && next.error.stage ? next.error.stage : "failed";
-        const message = next.error && next.error.message ? next.error.message : "Generation failed.";
-        note("error", `“${next.name}” failed during ${stage}: ${message}`);
-        if (state.selectedGenerationId === next.id) ensureInspection(next.id, true);
-      } else if (next.status === "cancelled" && current.status !== "cancelled") {
-        note("info", `“${next.name}” was cancelled. No timeline was created.`);
-        if (state.selectedGenerationId === next.id) ensureInspection(next.id, true);
-      } else if (!isTerminalGeneration(next.status) && viewingGeneration(next.id)) {
+      await reconcileGeneration(next);
+      if (!isTerminalGeneration(next.status) && viewingGeneration(next.id)) {
         ensureInspection(next.id, true);
       }
     }
@@ -748,18 +799,25 @@ async function cancelGeneration(id) {
   }
   try {
     const next = await api.cancelGeneration(id);
-    upsertGeneration(next);
-    note("info", `Cancelled “${next.name}”. No timeline was created.`);
+    await reconcileGeneration(next);
     ensureInspection(id, true);
     renderNow();
   } catch (error) {
+    if (error.status === 409) {
+      try {
+        await reconcileGeneration(await api.generation(id));
+        renderNow();
+      } catch (refreshError) {
+        note("error", refreshError.message || "The generation could not be refreshed.");
+      }
+    }
     note("error", error.message || "The generation could not be cancelled.");
   }
 }
 
 function ensureSnapshot(id, force = false) {
   if (!id) return;
-  if (!force && (state.snapshotStatus[id] === "loading" || state.snapshotStatus[id] === "ready")) return;
+  if (!force && state.snapshotStatus[id]) return;
   const token = (state.snapshotToken[id] || 0) + 1;
   state.snapshotToken[id] = token;
   state.snapshotStatus[id] = "loading";
@@ -780,7 +838,7 @@ function ensureSnapshot(id, force = false) {
 function invalidateSnapshots() {
   state.snapshotsById = {};
   state.snapshotStatus = {};
-  state.snapshotToken = {};
+  for (const id of Object.keys(state.snapshotToken)) state.snapshotToken[id] += 1;
 }
 
 function bumpPreview() {
@@ -803,6 +861,7 @@ function armPreviewTimeout() {
 
 async function runMutation(options) {
   if (state.busy) return null;
+  timelineReadToken += 1;
   state.busy = true;
   state.transition = options.transition || null;
   renderNow();
@@ -811,7 +870,8 @@ async function runMutation(options) {
     result = await options.work();
     const refreshed = await refreshTimelines({ quiet: true, fromMutation: true });
     if (!refreshed) {
-      mergeTimeline(result);
+      if (options.fallback) options.fallback(result);
+      else mergeTimeline(result);
       note("error", "The action succeeded, but refreshing timelines failed.");
     }
     try {
@@ -936,6 +996,7 @@ async function submitComposer(event) {
       state.composer.open = false;
       state.view = "workspace";
       if (timeline && timeline.id) {
+        state.selectedGenerationId = null;
         state.selectedId = timeline.id;
         state.panToId = timeline.id;
       }
@@ -1032,6 +1093,7 @@ async function enterTimeline(id) {
     work: () => api.activate(timeline.id),
     reloadPreview: true,
     after: () => {
+      state.selectedGenerationId = null;
       state.selectedId = timeline.id;
       state.panToId = timeline.id;
     },
@@ -1138,6 +1200,7 @@ async function confirmDialog() {
       reloadPreview: wasActive,
       after: () => {
         if (wasActive) {
+          state.selectedGenerationId = null;
           state.selectedId = state.activeTimelineId;
           state.panToId = state.activeTimelineId;
         }
@@ -1161,6 +1224,7 @@ async function confirmDialog() {
       work: () => api.restore(timeline.id, dialog.snapshotId),
       reloadPreview: true,
       after: () => {
+        state.selectedGenerationId = null;
         state.selectedId = timeline.id;
         state.view = "workspace";
         state.panToId = timeline.id;
@@ -1184,6 +1248,7 @@ async function createSnapshot(id) {
       detail: "Checkpointing the live code and database. The runtime will restart.",
     },
     work: () => api.createSnapshot(timeline.id),
+    fallback: (snapshot) => mergeTimeline({ ...timeline, snapshot_id: snapshot.id }),
     reloadPreview: true,
     success: (snapshot) => `Saved snapshot ${shortId(snapshot?.id)} for “${timeline.name}”.`,
   });
@@ -1916,6 +1981,7 @@ function snapshotSection(timeline) {
   const status = state.snapshotStatus[timeline.id];
   const snapshots = state.snapshotsById[timeline.id] || [];
   let body = '<p class="field-help">Oldest first. Restoring checkpoints the outgoing timeline, then restarts the live app.</p>';
+  body += button({ action: "refresh-snapshots", id: timeline.id, label: "Refresh snapshots", disabled: status === "loading" });
   if (status === "error") {
     body += `<div class="callout">${esc(state.snapshotError[timeline.id] || "Snapshots could not be loaded.")}</div>`;
   } else if (status !== "ready") {
@@ -2020,7 +2086,7 @@ function renderGenerationInspector(root, previousScroll) {
   const id = state.selectedGenerationId;
   const generation = generationById(id);
   const packet = state.inspections[id];
-  const record = (packet && packet.record) || generation;
+  const record = generation || (packet && packet.record);
   if (!record) {
     root.innerHTML = '<div class="inspector-scroll"><div class="empty">That generation is no longer available.</div></div>';
     return;
@@ -2057,7 +2123,7 @@ function renderGenerationInspector(root, previousScroll) {
           title: parent ? "Select the parent timeline. This does not switch the runtime." : "The parent timeline is missing.",
         })}
       </div>
-      ${packet && packet.error ? `<div class="banner">${esc(packet.error)}</div>` : ""}
+      ${packet && packet.error ? `<div class="banner">${esc(packet.error)}${button({ action: "retry-inspection", id, label: "Retry details" })}</div>` : ""}
       ${errorText ? `<div class="banner">${esc(errorText)}</div>` : ""}
       ${section("overview", "Overview", `
         <div class="kv">
@@ -2096,9 +2162,7 @@ function renderInspector() {
     ensureInspection(timeline.generation_id);
   }
   const generationPacket = timeline.generation_id ? state.inspections[timeline.generation_id] : null;
-  const generationRecord = generationPacket && generationPacket.record
-    ? generationPacket.record
-    : timeline.generation_id ? generationById(timeline.generation_id) : null;
+  const generationRecord = generationById(timeline.generation_id) || generationPacket?.record;
   const parent = timeline.parent_id ? byId(timeline.parent_id) : null;
   const kids = childrenOf(timeline.id);
   const modification = timeline.modification;
@@ -2164,6 +2228,7 @@ function renderInspector() {
           ${timeline.is_active ? `<div class="kv-row"><span>Ordering</span><strong>${esc(ordering && ordering.value ? orderingText(ordering.value) : ordering && ordering.error ? "Unavailable" : "Checking…")}</strong></div>` : ""}
         </div>
       `)}
+      ${generationPacket?.error ? `<div class="banner">${esc(generationPacket.error)}${button({ action: "retry-inspection", id: timeline.generation_id, label: "Retry details" })}</div>` : ""}
       ${section("evaluation", "Evaluation", timeline.generation_id
         ? (generationPacket ? evaluationHTML(generationRecord) : `<div class="callout">Loading checks…</div>`)
         : `<div class="callout"><strong>Not yet available.</strong><br>This timeline has no generation. Memory, authentication reliability, and error rates are not reported. AI generations show the checks, test counts, and durations the engine returns.</div>`)}
@@ -2511,6 +2576,7 @@ const actions = {
   "ask-restore": (element) => askRestore(element.dataset.id || state.selectedId, element.dataset.snapshotId),
   "create-snapshot": (element) => createSnapshot(element.dataset.id || state.selectedId),
   "refresh-snapshots": (element) => ensureSnapshot(element.dataset.id || state.selectedId, true),
+  "retry-inspection": (element) => ensureInspection(element.dataset.id, true),
   "dialog-cancel": () => {
     state.dialog = null;
     renderNow();
@@ -2792,15 +2858,12 @@ async function boot() {
   else note("error", state.healthError || state.listError || "Cannot reach the Paradox engine.");
   window.setInterval(() => {
     if (state.busy || document.hidden) return;
+    const before = healthSignature();
     refreshHealth({ quiet: true }).then(() => {
+      if (before === healthSignature()) return;
       renderTopbar();
-      if (state.view === "settings") {
-        const healthKey = `${state.connected}|${state.health && state.health.status}|${state.health && state.health.runtime_running}|${state.health && state.health.active_timeline_id}|${state.healthError || ""}`;
-        if (healthKey !== state.settingsHealthKey) {
-          state.settingsHealthKey = healthKey;
-          renderStage();
-        }
-      } else renderInspector();
+      if (state.view === "settings") renderStage();
+      else renderInspector();
     });
   }, 5000);
   window.setInterval(async () => {
