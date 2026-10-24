@@ -59,7 +59,7 @@ class Registry:
             root = path.resolve(strict=True)
         except (OSError, ValueError, RuntimeError) as error:
             raise RepositoryError("invalid_path", "Repository directory does not exist", 400) from error
-        if root in {Path(root.anchor), Path.home().resolve(), self.checkout} or root == self.state_dir or self.state_dir in root.parents:
+        if root in {Path(root.anchor), Path.home().resolve(), self.checkout} or root == self.state_dir or self.state_dir in root.parents or root in self.state_dir.parents:
             raise RepositoryError("unsafe_path", "This directory cannot be registered", 400)
         try:
             if not root.is_dir():

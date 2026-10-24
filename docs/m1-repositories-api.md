@@ -24,6 +24,9 @@ This document is the persistence addendum and exact HTTP integration reference.
   header or browser DELETE. Registration/forgetting are native/CLI operations.
 - No route imports project code, installs dependencies, runs tests/scripts,
   starts previews, generates futures or writes into the selected repository.
+- Keep the engine state directory outside imported repositories. Roots containing
+  the engine state directory are rejected as `unsafe_path`, as are roots inside
+  that directory; registration cannot make persistence writes in imported source.
 
 The examples use placeholder tokens and an illustrative existing path. IDs and
 timestamps are examples, not constants. POST requests use `Content-Type: application/json`.
@@ -106,6 +109,8 @@ Other fields are required when supplying a configuration. Unknown keys, other
 adapters, arbitrary commands, invalid app syntax or another state_env return 422.
 M1 restricts working_dir to `.`; test paths cannot escape or use symlink directories.
 The app, tests and health endpoint must match static candidates.
+Inferred targets outside the adapter's ASCII dotted-module syntax produce
+`valid:false` with `configuration_unsupported`, not a startup failure.
 
 Successful response **200**:
 

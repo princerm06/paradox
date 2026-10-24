@@ -38,8 +38,8 @@ Corrupt/unreadable/symlinked registry storage logs a code-only warning, lists no
 registrations and refuses registry mutations with 503 rather than overwriting it.
 This never prevents the original demo from starting.
 Duplicate roots return 409 with the existing ID. DELETE forgets registration only;
-it never removes repository files. Root/home, the engine checkout, engine state
-and descendants, relative/traversal paths and external Git-directory layouts are
+it never removes repository files. Root/home, the engine checkout, engine state,
+its descendants or containing repositories, relative/traversal paths and external Git-directory layouts are
 rejected. Symlink selections canonicalize to a single root identity; subsequent
 root replacement by a symlink fails closed.
 

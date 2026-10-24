@@ -110,7 +110,9 @@ def test_unsafe_paths_rejected(client, path):
 
 
 def test_invalid_nonroot_and_state_paths_rejected(client, tmp_path, repo):
-    for path in (tmp_path, repo / "pkg"):
+    invalid = tmp_path / "not-a-repository"
+    invalid.mkdir()
+    for path in (invalid, repo / "pkg"):
         assert client.post("/api/repositories", json={"path": str(path)}, headers=SHELL).status_code == 422
     assert client.post("/api/repositories", json={"path": str(tmp_path / "engine")}, headers=SHELL).status_code == 400
     checkout = Path(__file__).resolve().parents[1]
@@ -255,7 +257,7 @@ def test_configured_roots_are_individual_repositories(tmp_path, monkeypatch, rep
         assert len(entries) == 1 and entries[0]["source"] == "configured"
     with TestClient(create_app(state_dir=tmp_path / "state2", runtime_port=0, repository_roots=[repo.parent])) as client:
         assert client.get("/api/repositories", headers=AUTH).json()["repositories"] == []
-    assert "unsupported_git_layout" in caplog.text
+    assert "unsafe_path" in caplog.text
 
 
 def test_stale_configured_root_does_not_break_engine(tmp_path, monkeypatch, repo, caplog):
@@ -342,3 +344,31 @@ def test_symlink_registry_is_not_followed_or_overwritten(repo, tmp_path):
     assert error.value.status == 503
     assert outside.read_text() == "private untouched content"
     assert (state / "repositories.json").is_symlink()
+
+
+def test_repository_containing_engine_state_is_not_registered(repo):
+    before = tree(repo)
+    registry = Registry([], repo / "engine-state")
+    registry.start()
+    with pytest.raises(RepositoryError) as error:
+        registry.register(str(repo))
+    assert error.value.code == "unsafe_path"
+    assert tree(repo) == before
+
+
+def test_unsupported_inferred_configuration_does_not_break_restart(repo, tmp_path, monkeypatch):
+    def unicode_target(root, files):
+        result = supported(root, files)
+        result["candidates"]["app"][0]["target"] = "pkg.δ:app"
+        return result
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", unicode_target)
+    state = tmp_path / "registry-state"
+    registry = Registry([], state)
+    registry.start()
+    entry = registry.register(str(repo))
+    restarted = Registry([], state)
+    restarted.start()
+    from engine.repositories.inspection import validate
+    result = validate(restarted, entry["id"], None)
+    assert not result["valid"]
+    assert "configuration_unsupported" in {item["code"] for item in result["diagnostics"]}

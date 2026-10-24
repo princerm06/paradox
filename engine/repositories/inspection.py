@@ -1,5 +1,7 @@
 from pathlib import Path, PurePosixPath
 
+from pydantic import ValidationError
+
 from engine.project_analysis import inspect_project
 from engine.repositories.models import AdapterConfig
 
@@ -35,9 +37,12 @@ def validate(registry, repository_id, supplied, persist=True):
         stored = registry.configuration(repository_id)
         supplied = AdapterConfig.model_validate(stored) if stored else None
     if supplied is None and len(candidates["app"]) == len(candidates["tests"]) == len(candidates["health"]) == 1:
-        supplied = AdapterConfig(adapter="fastapi-sqlite-v1", app=candidates["app"][0]["target"],
-                                 tests=candidates["tests"][0]["path"], health_path=candidates["health"][0]["path"],
-                                 state_env="PARADOX_APP_DIR")
+        try:
+            supplied = AdapterConfig(adapter="fastapi-sqlite-v1", app=candidates["app"][0]["target"],
+                                     tests=candidates["tests"][0]["path"], health_path=candidates["health"][0]["path"],
+                                     state_env="PARADOX_APP_DIR")
+        except ValidationError:
+            diagnostics.append(diagnostic("configuration_unsupported", "Detected candidates do not fit the supported adapter configuration"))
     if supplied is None:
         diagnostics.append(diagnostic("configuration_required", "Provide an explicit supported adapter configuration"))
     else:
