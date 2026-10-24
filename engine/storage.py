@@ -34,7 +34,7 @@ class Storage:
             CREATE TABLE IF NOT EXISTS timelines (
                 id TEXT PRIMARY KEY, parent_id TEXT REFERENCES timelines(id),
                 name TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
-                snapshot_id TEXT, modification TEXT
+                snapshot_id TEXT, modification TEXT, generation_id TEXT
             );
             CREATE TABLE IF NOT EXISTS snapshots (
                 id TEXT PRIMARY KEY, timeline_id TEXT NOT NULL REFERENCES timelines(id),
@@ -46,6 +46,9 @@ class Storage:
         if "modification" not in columns:
             with self.connection:
                 self.connection.execute("ALTER TABLE timelines ADD COLUMN modification TEXT")
+        if "generation_id" not in columns:
+            with self.connection:
+                self.connection.execute("ALTER TABLE timelines ADD COLUMN generation_id TEXT")
 
     def setting(self, key):
         row = self.connection.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -97,10 +100,13 @@ class Storage:
     def restore(self, snapshot_id):
         if self.connection.execute("SELECT 1 FROM snapshots WHERE id=?", (snapshot_id,)).fetchone() is None:
             raise KeyError("Snapshot not found")
+        self.materialize(self.snapshots / snapshot_id)
+
+    def materialize(self, source):
         temporary = self.root / "workspace.staging"
         if temporary.exists():
             shutil.rmtree(temporary)
-        copy_tree(self.snapshots / snapshot_id, temporary)
+        copy_tree(source, temporary)
         if self.workspace.exists():
             shutil.rmtree(self.workspace)
         temporary.rename(self.workspace)
