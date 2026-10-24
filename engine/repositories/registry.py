@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 import secrets
 import threading
@@ -14,7 +15,10 @@ class Registry:
         self.state_dir = Path(state_dir).resolve()
         self.checkout = Path(__file__).resolve().parents[2]
         for root in roots:
-            self.register(str(root), "configured")
+            try:
+                self.register(str(root), "configured")
+            except RepositoryError as error:
+                logging.getLogger(__name__).warning("Configured repository skipped: %s", error.code)
 
     def register(self, value, source="picker"):
         path = Path(value)

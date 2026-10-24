@@ -16,7 +16,9 @@ Browser/dev setup supplies individual repository roots through
 `create_app(repository_roots=[...])` or `PARADOX_REPOSITORY_ROOTS` (OS path separator).
 Each root must itself be the Git top level, not a parent directory to browse.
 No configured roots means an empty registry; existing demo functionality remains
-available. Invalid configured repositories fail startup/configuration explicitly.
+available. Invalid or stale configured entries are skipped with a warning that
+contains only the error code, never the path; other registrations and the demo
+continue to start normally.
 
 Native registration is `POST /api/repositories {"path":"/absolute/repo"}`.
 It requires both the Bearer token and `X-Paradox-Shell-Token`, checked against
@@ -31,6 +33,33 @@ it never removes repository files. Root/home, the engine checkout, engine state
 and descendants, relative/traversal paths and external Git-directory layouts are
 rejected. Symlink selections canonicalize to a single root identity; subsequent
 root replacement by a symlink fails closed.
+
+## HTTP contract
+
+| Method | Route | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/api/repositories` | No body | `{repositories: [RepositorySummary]}` |
+| POST | `/api/repositories` | `{path}`; shell token required | 201 `RepositorySummary` |
+| POST | `/api/repositories/{id}/inspect` | `{}` required | `Inspection` |
+| POST | `/api/repositories/{id}/validate` | `{}` or `{configuration}` required | `Validation` |
+| DELETE | `/api/repositories/{id}` | No body; shell token required | 204 |
+
+Inspect/validate require JSON bodies: clients must send `{}` even without options;
+an omitted body returns 422. Request schema errors also return 422. Repository
+errors have `detail: {code, message}`; authentication errors use a string detail.
+Frontend error codes are:
+
+| Status | Codes |
+| --- | --- |
+| 400 | `unsafe_path`, `invalid_path` |
+| 404 | `unknown_repository` |
+| 409 | `already_registered` (message includes existing ID) |
+| 422 | `unsupported_git_layout`, `unsafe_git_layout`, `unsafe_git_metadata`, `not_repository_root`, `invalid_repository`, `git_failed`, `git_timeout`, `repository_too_large`, `unsupported_filename`, `unsafe_tracked_path` |
+| 503 | `sandbox_unavailable` |
+
+Validation incompatibilities return HTTP 200 with `valid: false` and diagnostics;
+they never start or install an application. The architect-owned contract defines
+the complete response fields and strict `AdapterConfig` schema.
 
 ## Read-only Git boundary
 
@@ -59,7 +88,8 @@ or working files; regressions check both and malicious fsmonitor/filter behavior
 | Single-root Python FastAPI project, one static `module:app`, declared dependencies, tracked tests and literal health endpoint; SQLite using `PARADOX_APP_DIR` or no SQLite | `fastapi-sqlite-v1` static configuration supported |
 | Missing/ambiguous static evidence | Requires configuration or invalid validation diagnostics; never guessed execution |
 | Django, Flask, Node/React/Next, Docker, external databases/services, monorepo working directories | No supported execution adapter |
-| Bare Git, linked worktrees/submodule Git-file roots, symlink Git metadata | Rejected |
+| Bare Git, linked worktrees/submodule Git-file roots, external `commondir`, symlink Git metadata | Rejected |
+| Non-UTF-8 paths or more than 10000 tracked paths | Rejected |
 | Submodules/LFS contents, arbitrary shell/start/test scripts, dependency installation | Not executed/resolved or supported as runtime inputs |
 | Non-macOS or unavailable write sandbox | 503, fail closed |
 

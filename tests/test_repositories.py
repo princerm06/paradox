@@ -26,7 +26,7 @@ def repo(tmp_path):
     git(root, "init", "-b", "main")
     (root / "pkg").mkdir()
     (root / "pkg/__init__.py").touch()
-    (root / "pkg/main.py").write_text('from fastapi import FastAPI\nimport os, sqlite3\napp=FastAPI()\nstate=os.environ["PARADOX_APP_DIR"]\n@app.get("/health")\ndef health(): return {"status":"ok"}\n')
+    (root / "pkg/main.py").write_text('from fastapi import FastAPI\nfrom pathlib import Path\nimport os, sqlite3\napp=FastAPI()\nstate=Path(os.environ["PARADOX_APP_DIR"])\ndatabase=state / "app.sqlite3"\ndef connection(): return sqlite3.connect(str(database))\n@app.get("/health")\ndef health(): return {"status":"ok"}\n')
     (root / "tests").mkdir()
     (root / "tests/test_app.py").write_text("def test_app(): assert True\n")
     (root / "requirements.txt").write_text("fastapi\nuvicorn\npytest\n")
@@ -113,6 +113,8 @@ def test_invalid_nonroot_and_state_paths_rejected(client, tmp_path, repo):
     for path in (tmp_path, repo / "pkg"):
         assert client.post("/api/repositories", json={"path": str(path)}, headers=SHELL).status_code == 422
     assert client.post("/api/repositories", json={"path": str(tmp_path / "engine")}, headers=SHELL).status_code == 400
+    checkout = Path(__file__).resolve().parents[1]
+    assert client.post("/api/repositories", json={"path": str(checkout)}, headers=SHELL).status_code == 400
 
 
 def test_dirty_detached_unborn_and_unusual_filenames(repo):
@@ -200,6 +202,36 @@ def test_capture_enforces_streaming_output_cap():
     assert error.value.code == "repository_too_large"
 
 
+def test_git_metadata_redirects_are_rejected(repo, tmp_path):
+    (repo / ".git/commondir").write_text(str(tmp_path))
+    with pytest.raises(RepositoryError) as error:
+        Git().inspect(repo)
+    assert error.value.code == "unsupported_git_layout"
+
+
+def test_real_analyzer_discovery_and_validation(repo, tmp_path, monkeypatch):
+    pytest.importorskip("engine.project_analysis")
+    monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
+    monkeypatch.setenv("PARADOX_SHELL_TOKEN", "test-shell")
+    before = tree(repo)
+    with TestClient(create_app(state_dir=tmp_path / "integration-state", runtime_port=0)) as connection:
+        repository_id = register(connection, repo)
+        result = connection.post(f"/api/repositories/{repository_id}/inspect", json={}, headers=AUTH)
+        assert result.json()["analysis"]["status"] == "supported", result.text
+        result = connection.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
+        assert result.json()["valid"], result.text
+        assert result.json()["configuration"]["app"] == "pkg.main:app"
+        assert result.json()["configuration"]["state_env"] == "PARADOX_APP_DIR"
+        (repo / "requirements.txt").write_text("pytest\n")
+        result = connection.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
+        assert not result.json()["valid"], result.text
+        assert any(item["code"] == "dirty_working_tree" for item in result.json()["diagnostics"])
+    before.pop("requirements.txt")
+    after = tree(repo)
+    after.pop("requirements.txt")
+    assert after == before
+
+
 @pytest.mark.parametrize("changes", [{"tests": "../outside"}, {"working_dir": "/tmp"}, {"app": "other.main:app"}, {"health_path": "/missing"}])
 def test_unsafe_or_unsupported_configuration_is_invalid(client, repo, changes):
     repository_id = register(client, repo)
@@ -216,10 +248,24 @@ def test_arbitrary_commands_forbidden_and_raw_paths_not_page_routes(client, repo
     assert client.post(f"/api/repositories/{repository_id}/inspect", json={"path": str(repo)}, headers=AUTH).status_code == 422
 
 
-def test_configured_roots_are_individual_repositories(tmp_path, monkeypatch, repo):
+def test_configured_roots_are_individual_repositories(tmp_path, monkeypatch, repo, caplog):
     monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
     with TestClient(create_app(state_dir=tmp_path / "state", runtime_port=0, repository_roots=[repo])) as client:
         entries = client.get("/api/repositories", headers=AUTH).json()["repositories"]
         assert len(entries) == 1 and entries[0]["source"] == "configured"
-    with pytest.raises(RepositoryError):
-        create_app(state_dir=tmp_path / "state2", repository_roots=[repo.parent])
+    with TestClient(create_app(state_dir=tmp_path / "state2", runtime_port=0, repository_roots=[repo.parent])) as client:
+        assert client.get("/api/repositories", headers=AUTH).json()["repositories"] == []
+    assert "unsupported_git_layout" in caplog.text
+
+
+def test_stale_configured_root_does_not_break_engine(tmp_path, monkeypatch, repo, caplog):
+    monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
+    missing = tmp_path / "moved-private-repository"
+    monkeypatch.setenv("PARADOX_REPOSITORY_ROOTS", os.pathsep.join((str(missing), str(repo))))
+    with TestClient(create_app(state_dir=tmp_path / "state", runtime_port=0)) as client:
+        entries = client.get("/api/repositories", headers=AUTH).json()["repositories"]
+        assert len(entries) == 1 and entries[0]["root"] == str(repo)
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/timelines").status_code == 200
+    assert "invalid_path" in caplog.text
+    assert str(missing) not in caplog.text
