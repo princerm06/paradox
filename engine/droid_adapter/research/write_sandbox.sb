@@ -1,0 +1,10 @@
+(version 1)
+(allow default)
+(deny network*)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "WORKSPACE"))
+  (subpath (param "SESSIONS"))
+  (subpath (param "LOGS"))
+  (subpath (param "SCRATCH"))
+  (literal "/dev/null"))

@@ -363,7 +363,312 @@ path/escape matrix. The mocked SDK direct-file edit now exercises registered
 writes with `allowed: false` and still requires permission-handler approval.
 No paid/live generation, push, merge, or Studio modification occurred.
 
-A second user-approved run is necessary to claim a successful real Factory
-generation after the fix, not to diagnose this failure or review the offline
-regressions. Model availability/account policy and actual CLI permission
-behavior still need that end-to-end confirmation. **Wait for approval.**
+The second user-approved run above failed; it did not establish successful
+editing. Any third run requires a separate security/configuration decision
+and user approval. Do not retry the current read-only configuration.
+
+## Offline investigation after run 2
+
+### Scope, versions and current production behavior
+
+No model turn, paid generation, autonomy escalation in the production adapter,
+or sandbox wiring was performed. Production remains Off with the restored
+strict gate; it now rejects the observed read-only catalog at stage `agent`
+without streaming. Script/Execute/WaitForScript and the other existing disabled
+IDs are unchanged, as are the scoped handler, guard, provider selection and API.
+
+Research environment: macOS `sw_vers -productVersion` **27.0**,
+`/usr/bin/sandbox-exec` present and working, Node 24.22.1, CLI 0.249.0,
+SDK 0.10.0. CLI binary SHA-256:
+`fc61a51b3b65d913d828eebb10ebb441915d453cd6c6ae3cab78a16e459e4038`.
+Binary offsets below apply only to this exact executable, not future releases.
+
+### Metadata experiments and exact commands
+
+`research/sdk_metadata.mjs` is an unwired metadata-only prototype. It never
+streams or adds a user message. It creates an SDK `ProcessTransport` explicitly
+and passes it to `createSession`, avoiding the normal API-key resolver solely
+for this offline probe. The CLI may read cached local login/configuration, but
+all network is denied and the key environment variable is unset. This is NOT
+a replacement for production API-key authentication. Sessions/transport close
+in `finally`; a 12-second abort bounds initialization.
+
+From the repository root (after the existing adapter build):
+
+```sh
+mkdir -p .venv/offline-research/workspace/demo_app
+for selection in enabled additional; do
+  env -u FACTORY_API_KEY /usr/bin/sandbox-exec \
+    -p '(version 1) (allow default) (deny network*)' \
+    node engine/droid_adapter/research/sdk_metadata.mjs \
+    off .venv/offline-research/workspace "$selection"
+done
+env -u FACTORY_API_KEY /usr/bin/sandbox-exec \
+  -p '(version 1) (allow default) (deny network*)' \
+  node engine/droid_adapter/research/sdk_metadata.mjs \
+  low .venv/offline-research/workspace none
+```
+
+Each JSONL output contains full settings and all tool entries at:
+initialization, actual catalog, a hypothetical `listTools` override query,
+actual catalog again, `updateSettings`, and actual catalog after the update.
+Local captures are `.venv/offline-research/sdk-off-enabled.jsonl`,
+`sdk-off-additional.jsonl` and `sdk-low.jsonl`.
+All probes reported zero permission requests and zero model turns: no tool
+was invoked, so this is NOT empirical permission-handler execution evidence.
+
+Results:
+
+- All initialized sessions reported interaction mode **auto**; enabling writes
+  did not change that mode or the Off autonomy level.
+- Off actual: effective mode **direct_only**, Read allowed, Edit/Create blocked.
+- Off + `updateSettings({enabledToolIds:['Read','Edit','Create'], disabledToolIds})`:
+  effective mode stays **direct_only**, autonomy stays **off**, Edit/Create
+  become allowed in the subsequent **actual** catalog. `additionalToolIds`
+  instead of `enabledToolIds` produced the same observed result.
+- Off + only hypothetical `listTools({enabledToolIds:..., disabledToolIds})`
+  or `additionalToolIds`: reports writes allowed in THAT response, but a
+  subsequent `listTools({})` still reports writes blocked. A hypothetical
+  response must NEVER be used as the production preflight for actual settings.
+- Low actual, with the **entire unchanged DISABLED_TOOL_IDS**: effective mode
+  **direct_only**, Read/Edit/Create allowed, Execute blocked. Several unrelated
+  tools become allowed too (see full table), making Low materially broader.
+
+**SDK public-schema mismatch:** SDK 0.10.0 exports
+`UpdateSessionSettingsRequestParamsSchema`, `ListToolsRequestParamsSchema`
+and `ToolSelectionOverridesSchema` with only `disabledToolIds`, not enable/add
+overrides. Parsing the probe objects with these schemas strips both
+`enabledToolIds` and `additionalToolIds`. `ToolOverrideParamsSchema` is not a
+public export here. Nevertheless `session.updateSettings` forwards the raw
+JavaScript object (`node.mjs:4005`) and the installed CLI accepts these fields;
+the settings notification and subsequent actual catalog confirm the change.
+This runtime behavior is **not a supported, typed SDK contract**. No private
+protocol patch or production cast was added. Factory confirmation or a typed
+SDK update is preferable before relying on it in production.
+
+For the separate bare-CLI catalog matrix, the exact flags used were:
+
+```sh
+DISABLED=$(node --input-type=module -e \
+  "import{DISABLED_TOOL_IDS}from'./engine/droid_adapter/dist/adapter.js';console.log(DISABLED_TOOL_IDS.join(','))")
+env -u FACTORY_API_KEY /usr/bin/sandbox-exec \
+  -p '(version 1) (allow default) (deny network*)' \
+  "$HOME/.local/bin/droid" exec --list-tools --model claude-sonnet-4-6 \
+  --output-format json --remove-tools "$DISABLED"
+```
+
+This full-list bare-CLI command failed with **Unknown tool identifier(s)**:
+the CLI validates selector names and some production disabled IDs are unknown
+to this version. SDK initialization accepts the unchanged list. Combining
+`--only-tools` and `--remove-tools` also failed explicitly as incompatible.
+Those failed outputs/stderr are retained in `cli-off*` and `cli-low*` captures.
+They are not treated as successful catalog measurements.
+
+The successful bare-CLI variants used the same command prefix with these
+selection flags instead of the full `--remove-tools "$DISABLED"`:
+
+| Capture | Exact selection flags | Read current/default | Edit current/default | Create current/default | Execute current/default |
+|---|---|---|---|---|---|
+| cli-known-off.json | `--remove-tools Execute,Script,WaitForScript` | true/true | false/false | false/false | false/true |
+| cli-known-off-add.json | `--remove-tools Execute,Script,WaitForScript --add-tools Read,Edit,Create` | true/true | true/false | true/false | false/true |
+| cli-known-off-only.json | `--only-tools Read,Edit,Create` | true/true | true/false | true/false | false/true |
+| cli-known-low.json | `--remove-tools Execute,Script,WaitForScript --auto low` | true/true | true/false | true/false | false/true |
+
+Script/WaitForScript/ApplyPatch were absent from all these outputs. These CLI
+variants are metadata-only controls, NOT proposed changes to the full production
+disabled list. The complete SDK catalog below is the evidence for configurations
+with that full list unchanged. Bare CLI `--list-tools` does not report effective
+execution mode; that value above comes from real SDK session initialization,
+not inference from the catalog. Passing add/only selectors at
+SDK transport startup was also tested (`sdk_metadata.mjs off WORKSPACE none add`
+and `... none only`); initialization reset them and actual writes stayed blocked.
+Thus `createSession({execArgs:['--add-tools',...]})` is not a proven solution.
+
+### Full SDK tool catalog output
+
+All three SDK configurations returned these **33 entries**. `1` means true,
+`0` false; defaultAllowed was identical across the configurations. Off-enabled
+means an actual post-update catalog, not a hypothetical query. Off-additional
+had the same table as Off-enabled. This records all registered catalog entries,
+including blocked ones, rather than claiming all are exposed to the model.
+
+| ID | defaultAllowed | Off allowed | Off-enabled allowed | Low allowed |
+|---|---:|---:|---:|---:|
+| AskUser | 0 | 0 | 0 | 0 |
+| ConnectApp | 1 | 0 | 0 | 0 |
+| Create | 0 | 0 | 1 | 1 |
+| CreateAutomation | 0 | 0 | 0 | 1 |
+| DeleteAutomation | 0 | 0 | 0 | 1 |
+| DismissHandoffItems | 0 | 0 | 0 | 0 |
+| Edit | 0 | 0 | 1 | 1 |
+| EditAutomation | 0 | 0 | 0 | 1 |
+| EndFeatureRun | 0 | 0 | 0 | 0 |
+| Execute | 1 | 0 | 0 | 0 |
+| ExitSpecMode | 0 | 0 | 0 | 0 |
+| FetchUrl | 1 | 0 | 0 | 0 |
+| GenerateDroid | 0 | 0 | 0 | 1 |
+| GenerateImage | 0 | 0 | 0 | 0 |
+| Glob | 1 | 1 | 1 | 1 |
+| Grep | 1 | 1 | 1 | 1 |
+| ListAutomations | 1 | 1 | 1 | 1 |
+| ListAutomationTemplates | 1 | 1 | 1 | 1 |
+| Loop | 0 | 0 | 0 | 1 |
+| LS | 1 | 1 | 1 | 1 |
+| ProposeMission | 0 | 0 | 0 | 0 |
+| Read | 1 | 1 | 1 | 1 |
+| ReadAutomation | 1 | 1 | 1 | 1 |
+| RunAutomation | 0 | 0 | 0 | 1 |
+| Skill | 1 | 1 | 1 | 1 |
+| StageSettingsChanges | 1 | 0 | 0 | 0 |
+| StartMissionRun | 0 | 0 | 0 | 0 |
+| Task | 1 | 0 | 0 | 0 |
+| TaskOutput | 0 | 0 | 0 | 1 |
+| TaskStop | 0 | 0 | 0 | 1 |
+| TodoWrite | 1 | 1 | 1 | 1 |
+| ToolSearch | 1 | 1 | 1 | 1 |
+| WebSearch | 1 | 0 | 0 | 0 |
+
+**Script, WaitForScript and ApplyPatch were absent in all three catalogs**;
+therefore their allowed/defaultAllowed values are unavailable, not fabricated
+false. Script/WaitForScript remain explicitly disabled; ApplyPatch is not the
+Sonnet file-tool profile. Read true/true, Edit/Create true/false after the
+explicit update, and Execute false/true are the requested key observations.
+
+### Permission-handler behavior: source evidence, not catalog inference
+
+Source was inspected in the installed CLI executable with bounded string
+extraction, without running a model or tool. The relevant symbol chain is:
+
+- Byte **185167545**: `shouldAutoApproveFileEdits` delegates to `isAutoRunMode`;
+  normal auto interaction with autonomy other than off returns true.
+- Byte **187713014**: `Io` resolves the file auto-approval policy.
+- Byte **187718179**: `Lo` handles direct Create/Edit confirmation. Each returns
+  no confirmation if `Io(sessionPolicy)` is true; otherwise it builds create/edit
+  details including the file path. ApplyPatch follows the same policy.
+- Byte **187735638**: `CP` collects only tool uses requiring confirmation.
+- Byte **194575802**: direct `requestConfirmationForToolUses` calls `CP`. If
+  that batch is empty it returns approved IDs without calling
+  `context.requestPermissionFn`. Otherwise, when the delegated permission
+  function is installed, it calls that function with the confirmation batch.
+- SDK `node.mjs:3618`, `setupClientHandlers`, wires our `permissionHandler`
+  to `client.setPermissionHandler`; it cannot intercept a tool for which the
+  CLI never sends a permission request.
+
+Consequences under the inspected ordinary (non-mission, no bypass-hook) policy:
+
+| Configuration | Expected direct Edit/Create confirmation behavior |
+|---|---|
+| Off, no explicit enable | Hidden; no edit reaches the handler (run 2 proves this). |
+| Off + explicit enable/add update | File auto-approval remains false; source builds a confirmation batch and routes it to our handler. |
+| Low | File auto-approval true; no edit/create confirmation batch; our handler is bypassed. |
+
+Low therefore bypasses our `demo_app/` scope check for ordinary file edits.
+Disabling Execute/Script does NOT fix that. Off plus explicit enablement is the
+only observed configuration that both exposes writes and retains the source
+path toward delegated confirmation. **Actual handler invocation under that
+configuration has NOT been observed**: metadata probes invoke no tools. A
+future approved tool execution must verify permission logs, not just catalog
+flags. The CLI also has hook `allow-bypass` and legacy-mission exceptions;
+trusted local configuration is assumed, not a guarantee against hostile hooks.
+Local source excerpts are saved under `.venv/offline-research/`; raw executable
+source is not vendored or patched.
+
+### OS-level write sandbox prototype
+
+`research/write_sandbox.sb` is **not wired to production**. It starts from
+allow-default, denies all network and all filesystem writes, then permits
+writes only beneath the isolated workspace, explicit Factory session/log
+directories, a dedicated scratch TMPDIR, and `/dev/null`. Read access remains
+unrestricted. It does NOT allow all of `~/.factory` or the engine repository.
+
+```sh
+ROOT="$PWD/.venv/offline-research"
+mkdir -p "$ROOT/workspace/demo_app" "$ROOT/tmp"
+printf 'outside sentinel\n' > "$ROOT/outside.txt"
+env -u FACTORY_API_KEY TMPDIR="$ROOT/tmp" /usr/bin/sandbox-exec \
+  -D "WORKSPACE=$ROOT/workspace" -D "SESSIONS=$HOME/.factory/sessions" \
+  -D "LOGS=$HOME/.factory/logs" -D "SCRATCH=$ROOT/tmp" \
+  -f engine/droid_adapter/research/write_sandbox.sb \
+  node engine/droid_adapter/research/sandbox_smoke.mjs \
+  "$ROOT/workspace" "$ROOT/outside.txt"
+```
+
+Observed output:
+
+```json
+{"insideWrite":"allowed","outsideWrite":"denied","symlinkEscape":"denied","childOutsideWrite":"denied","sentinel":"unchanged"}
+```
+
+The smoke process also verifies that the outside sentinel's bytes are unchanged.
+Under the same profile, replacing the trailing Node smoke command with
+`"$HOME/.local/bin/droid" exec --list-tools --model claude-sonnet-4-6 --auto low --remove-tools Execute,Script,WaitForScript --output-format json`
+exited **0**, emitted its catalog, and had empty stderr. That startup smoke
+uses the three named removals; the SDK probes use the full disabled list.
+Replacing it with
+`node engine/droid_adapter/research/sdk_metadata.mjs off "$ROOT/workspace" enabled`
+also exited **0** with empty stderr: session initialized off/direct_only;
+actual post-update Read/Edit/Create were allowed; Execute remained blocked.
+
+Limitations: sandbox-exec is deprecated/macOS-only; this prototype working on
+this machine does not guarantee future OS support. A live session may need
+additional cache/telemetry/temp paths; none should be broadly granted without
+evidence. Shared Factory sessions/logs are writable exceptions and could be
+tampered with; use job-specific directories if Factory supports that safely.
+Canonical paths, inherited descriptors, IPC/services, concurrent jobs,
+cancellation and CLI descendants need adversarial testing. Allow-default plus
+write denial is not a full hostile-code sandbox. Reads and credential exposure
+remain outside its scope. The profile denies network entirely, so a real model
+turn CANNOT work under this exact profile: controlled Factory network access
+would need a separately approved design. No production network exception was
+added. The post-run guard cannot undo writes outside the copied tree and is
+not a substitute for OS enforcement.
+
+### Recommendation for review (not implemented)
+
+**Do not switch to Low.** It broadens the tool surface and bypasses the handler.
+Keep the production strict gate and Off until explicit enablement is approved.
+Prefer Factory-supported, typed enablement with the same proven runtime shape,
+plus an independently reviewed write sandbox as defense in depth. Candidate
+SDK configuration, only after approval and SDK compatibility review:
+
+```ts
+const session = await createSession({
+  cwd: isolatedCodeDirectory,
+  modelId: process.env.PARADOX_DROID_MODEL?.trim() || 'claude-sonnet-4-6',
+  autonomyLevel: AutonomyLevel.Off,
+  disabledToolIds: [...DISABLED_TOOL_IDS],
+  autoRejectPermissionRequests: false,
+  disableBuiltinSkills: true,
+  abortSignal,
+  permissionHandler: existingScopedPermissionHandler,
+});
+const overrides = {
+  enabledToolIds: ['Read', 'Edit', 'Create'],
+  disabledToolIds: [...DISABLED_TOOL_IDS],
+};
+await session.updateSettings(overrides);
+```
+
+The snippet is deliberately a research proposal, not production integration:
+the extra enabledToolIds field passes structurally through a JavaScript object,
+but SDK 0.10.0 does not declare it in the public settings type. Do not bypass
+schema validation or ship an untyped override silently. If Factory cannot
+support this configuration,
+stay failed-closed; do not substitute Low as an automatic fallback. After an
+approved update, preflight must query the ACTUAL session (only a toolIds filter,
+no hypothetical autonomy/enable overrides), retain exact model/direct_only
+checks, and require all three tools allowed. Close on every failure.
+
+A future separately approved live run can prove actual model-visible writes,
+permission-handler invocation/denial, CLI-child sandbox compatibility with
+network, real source diffs, validation, adoption, cost and cancellation. Offline
+metadata/source/smoke evidence proves none of those end-to-end claims. Do not
+spend credits merely to discover the same read-only catalog again.
+
+Final offline validation for the strict restoration and research handoff:
+**41 Node tests passed**, **46 targeted Python passed in 36.44s**, and the
+**full Python suite passed 134, with 1 live test skipped, in 205.94s**. Both
+Python commands unset `FACTORY_API_KEY`. Both research scripts pass `node --check`;
+the sandbox smoke assertions passed, SDK metadata probes exited 0, and
+`git diff --check` passed. Failed bare-CLI selector controls are recorded above
+and are not test-suite failures or hidden successful-probe claims.
