@@ -77,5 +77,12 @@ Recovery:
 - Errors are `{detail: string}`: 404 unknown, 409 lifecycle conflict, 503 transition failed (previous timeline restored).
 - CORS is configurable. The defaults allow `localhost`/`127.0.0.1` on 3000 and 5173 (frontend port not yet confirmed).
 
+## Milestone 2: AI-generated futures
+The spec is `docs/contracts/m2-generation.md`. It's additive: milestone 1 endpoints are unchanged.
+- **Reuses milestone 1.** A generation copies the parent's *head snapshot* into `<state>/generations/<id>/workspace/`. It validates with a throwaway `Runtime(gen_root, port=0)` on a copy of that state. Adoption reuses `snapshot()` and `create_timeline()`, and only *prepare* and *adopt* take the gate.
+- **Agents.** `droid` uses the official Factory Droid TypeScript SDK through a Node adapter (JSON stdin / JSONL stdout, §4.1). `scripted` is deterministic and offline. `claude` is an optional fallback.
+- **Invariants.** A generation never writes the parent, its snapshots, source `demo_app/` or the live runtime. Failure or cancel creates no timeline. An engine restart fails in-flight generations with `stage: engine`.
+- **Not a sandbox.** Agents and generated code run as the OS user. Untrusted code execution is out of scope.
+
 ## Out of scope for milestone 1
 AI code generation (Factory Droid), telemetry, timeline diff/compare, auth, sandboxing untrusted code.

@@ -268,7 +268,7 @@ def test_unavailable_provider_is_rejected_up_front(gen):
 
 
 @pytest.mark.skipif(not (shutil.which("droid") and os.environ.get("FACTORY_API_KEY")),
-                    reason="live Droid test needs the droid CLI and FACTORY_API_KEY")
+                    reason="live Droid SDK test needs the droid CLI, FACTORY_API_KEY, and the adapter installed")
 def test_live_droid_generation_records_a_complete_result(engine_factory):
     e = engine_factory(env={"PARADOX_AGENT": "droid"})
     root = e.root_id()
@@ -276,7 +276,12 @@ def test_live_droid_generation_records_a_complete_result(engine_factory):
         "parent_id": root, "prompt": "Rank the feed by number of likes, most liked first. Add a test."})
     g = wait(e, g["id"], timeout=600)
     assert g["status"] in {"succeeded", "failed"}
+    assert g["provider"] == "droid"
+    # SDK provenance: a Droid session ran and reported its result.
     assert g["agent"] and g["agent"]["duration_ms"] >= 0
+    assert g["agent"]["exit_code"] in (0, 1), g["agent"]
+    assert g["agent"]["session_id"], "Droid SDK session id must be recorded"
+    assert e.call("GET", f"/api/generations/{g['id']}/logs")["lines"], "SDK event stream must be logged"
     assert e.active_id() == root and e.feed()["ordering"] == "chronological"
     if g["status"] == "succeeded":
         e.activate(g["timeline_id"])
