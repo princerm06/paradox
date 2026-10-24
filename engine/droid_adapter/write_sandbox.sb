@@ -1,0 +1,8 @@
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "APP"))
+  (subpath (param "FACTORY"))
+  (subpath (param "SCRATCH"))
+  (literal "/dev/null"))

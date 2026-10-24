@@ -24,6 +24,7 @@ Configuration:
 - `PARADOX_TOKEN`: optional bearer token required on mutating `/api/*` requests.
 - `PARADOX_APP_URL`: public absolute iframe URL; default engine request origin.
 - `PARADOX_AGENT`: `droid` by default, or `scripted` for offline rehearsals.
+- `PARADOX_DROID_MODEL`: direct-tool SDK model, default `claude-sonnet-4-6`.
 - `PARADOX_SCRIPTED_RECIPES`: recipe directory, default `tests/fixtures/scripted_agent`.
 
 Set credentials privately in your local environment. Do not put keys or tokens in
@@ -43,10 +44,11 @@ node dist/adapter.js --probe
 This is the official `@factory/droid-sdk` TypeScript integration, not a direct
 `droid exec` subprocess. The SDK itself still requires the `droid` executable on
 PATH. Node 20+, that binary, the built adapter and `FACTORY_API_KEY` must all be
-available for `/api/agents` to enable Droid. Live authenticated validation was
-not possible in the development environment; the adapter has mocked-SDK tests
-and Python/Node protocol tests. See `droid_adapter/README.md` for limitations,
-permission restrictions and transitive dependency audit notices.
+available for `/api/agents` to enable Droid. Availability is a local prerequisite
+check, not an authenticated service/credit check. See
+`droid_adapter/VERIFICATION.md` for the official SDK call chain, test evidence,
+and a one-paid-call HTTP verifier. See `droid_adapter/README.md` for limitations,
+permission restrictions and dependency audit notices.
 
 ## Generation isolation and recovery
 

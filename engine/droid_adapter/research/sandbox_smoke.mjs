@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+const workspace = path.resolve(process.argv[2]);
+const outside = path.resolve(process.argv[3]);
+const probe = mkdtempSync(path.join(workspace, 'sandbox-probe-'));
+const sentinel = readFileSync(outside, 'utf8');
+const inside = path.join(probe, 'sandbox-inside.txt');
+writeFileSync(inside, 'inside permitted');
+assert.equal(readFileSync(inside, 'utf8'), 'inside permitted');
+const denied = (target) => assert.throws(() => writeFileSync(target, 'must be denied'), (error) => error.code === 'EPERM' || error.code === 'EACCES');
+denied(outside);
+const link = path.join(probe, 'sandbox-outside-link');
+symlinkSync(outside, link);
+denied(link);
+const child = spawnSync(process.execPath, ['--input-type=module', '-e', 'import{writeFileSync}from"node:fs";writeFileSync(process.argv[1],"must be denied")', outside], { encoding: 'utf8' });
+assert.notEqual(child.status, 0);
+assert.match(child.stderr, /EPERM|EACCES/);
+assert.equal(readFileSync(outside, 'utf8'), sentinel);
+console.log(JSON.stringify({ insideWrite: 'allowed', outsideWrite: 'denied', symlinkEscape: 'denied', childOutsideWrite: 'denied', sentinel: 'unchanged' }));

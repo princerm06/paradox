@@ -166,7 +166,8 @@ class Generations:
             agent = self.providers.run(generation["provider"], generation["prompt"], code, control, directory / "agent.log")
             self.update(generation_id, agent=agent)
             if agent["exit_code"] != 0:
-                raise RuntimeError("Agent exited with a nonzero status; inspect agent logs")
+                detail = agent.get("summary") or "inspect agent logs"
+                raise RuntimeError(f"{generation['provider']} agent exited with status {agent['exit_code']}: {detail}")
             passed("agent", started)
             self.update(generation_id, status="validating")
             control.check()
