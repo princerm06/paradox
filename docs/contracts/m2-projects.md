@@ -101,6 +101,20 @@ Every imported-code process runs under `sandbox-exec`: the Original boot, pytest
 - **Environment:** the existing `scrubbed_environment()` with `PARADOX_APP_DIR` set. No `FACTORY_API_KEY`, `PARADOX_TOKEN` or shell token.
 - **Required tests:** a fixture app whose import-time code tries to write outside state, to open an outbound socket, and to exec `/bin/sh`. All three are blocked, and the run fails or continues according to the test.
 
+Verified by Claude on 2026-10-24 (macOS, CLT Python 3.9, engine venv). pytest passed and uvicorn served `/health` under the profile; a SQLite write to state succeeded; `$HOME` write and `/bin/sh` exec were blocked. Two traps the profile must avoid:
+- **The network rule.** `(allow network* (local ip "localhost:*"))` **lets outbound connections to 1.1.1.1 through.** Use exactly:
+  ```
+  (deny network*)
+  (allow network-bind (local ip "localhost:*"))
+  (allow network-inbound (local ip "localhost:*"))
+  (allow network-outbound (remote ip "localhost:*"))
+  ```
+  This blocks outbound traffic to non-loopback hosts and keeps loopback bind, accept and connect working.
+- **The exec allowlist.** Framework Python re-execs `<prefix>/Resources/Python.app/Contents/MacOS/Python`. The allowlist needs that literal as well as `realpath(sys.executable)`. Otherwise every run fails with `posix_spawn`.
+- **Python path.** Pass the engine venv `site-packages` through `PYTHONPATH`, because the realpath interpreter is not the venv shim.
+
+Import evidence (same date): with a `.gitattributes` smudge filter configured, `git archive HEAD` **ran the filter**, which wrote a marker. `ls-tree` plus `cat-file --batch` did not.
+
 ## HTTP API
 
 **Authentication:**
