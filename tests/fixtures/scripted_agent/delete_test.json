@@ -1,0 +1,8 @@
+{
+  "match": "delete a test",
+  "delay_s": 0,
+  "summary": "Intentional deletion of a protected base test: demonstrate guard rejection before validation.",
+  "files": {
+    "demo_app/tests/test_feed_contract.py": null
+  }
+}

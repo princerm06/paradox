@@ -1,0 +1,9 @@
+{
+  "match": "slow",
+  "delay_s": 5,
+  "summary": "Waited five seconds, then added a harmless rehearsal marker and a passing feature test.",
+  "files": {
+    "demo_app/rehearsal.py": "REHEARSAL_MESSAGE = \"A new future can be explored without changing the feed.\"\n",
+    "demo_app/tests/test_generated_rehearsal.py": "from demo_app.rehearsal import REHEARSAL_MESSAGE\n\n\ndef test_generated_rehearsal_marker():\n    assert REHEARSAL_MESSAGE == \"A new future can be explored without changing the feed.\"\n"
+  }
+}

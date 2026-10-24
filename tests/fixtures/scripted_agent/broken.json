@@ -1,0 +1,8 @@
+{
+  "match": "break the app",
+  "delay_s": 0,
+  "summary": "Intentional syntax error: demonstrate compile rejection without adopting a child timeline.",
+  "files": {
+    "demo_app/ranking.py": "ORDERING = \"popular\"\n\n\ndef rank(posts)\n    return posts\n"
+  }
+}
