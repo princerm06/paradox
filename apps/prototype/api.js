@@ -7,6 +7,7 @@
  */
 
 export const API_BASE = "http://127.0.0.1:8000";
+const TOKEN_KEY = "paradox.token";
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -16,7 +17,26 @@ export class ApiError extends Error {
   }
 }
 
+export function getToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setToken(value) {
+  try {
+    const next = String(value || "").trim();
+    if (next) localStorage.setItem(TOKEN_KEY, next);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* Private browsing can reject storage. The request still proceeds without a token. */
+  }
+}
+
 function statusLabel(status) {
+  if (status === 401) return "Unauthorized";
   if (status === 404) return "Not found";
   if (status === 409) return "Conflict";
   if (status === 422) return "Invalid request";
@@ -61,19 +81,38 @@ async function readBody(response) {
   }
 }
 
-async function request(path, { method = "GET", body, signal } = {}) {
+async function request(path, { method = "GET", body, signal, text = false } = {}) {
+  const headers = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const token = getToken();
+  if (token && method !== "GET" && method !== "HEAD") headers.Authorization = `Bearer ${token}`;
+
   let response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       method,
       signal,
       cache: "no-store",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (error) {
     if (error && error.name === "AbortError") throw error;
     throw new ApiError(0, `Offline: Cannot reach the Paradox engine at ${API_BASE}.`);
+  }
+
+  if (text) {
+    const raw = await response.text();
+    if (!response.ok) {
+      let detail = raw;
+      try {
+        detail = JSON.parse(raw).detail;
+      } catch {
+        /* The body is already the message. */
+      }
+      throw new ApiError(response.status, formatDetail(detail, response.status));
+    }
+    return raw;
   }
 
   const payload = await readBody(response);
@@ -86,6 +125,10 @@ async function request(path, { method = "GET", body, signal } = {}) {
 
 function timelinePath(id, suffix) {
   return `/api/timelines/${encodeURIComponent(id)}${suffix}`;
+}
+
+function generationPath(id, suffix = "") {
+  return `/api/generations/${encodeURIComponent(id)}${suffix}`;
 }
 
 export const api = {
@@ -125,5 +168,35 @@ export const api = {
       method: "POST",
       body: { snapshot_id: snapshotId },
     });
+  },
+  agents(signal) {
+    return request("/api/agents", { signal });
+  },
+  generations(parentId, signal) {
+    const query = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : "";
+    return request(`/api/generations${query}`, { signal });
+  },
+  generation(id, signal) {
+    return request(generationPath(id), { signal });
+  },
+  createGeneration({ parentId, prompt, name, provider, activateOnSuccess = false }) {
+    const body = {
+      parent_id: parentId,
+      prompt,
+      provider,
+      activate_on_success: Boolean(activateOnSuccess),
+    };
+    if (name) body.name = name;
+    return request("/api/generations", { method: "POST", body });
+  },
+  cancelGeneration(id) {
+    return request(generationPath(id, "/cancel"), { method: "POST" });
+  },
+  generationLogs(id, stream = "agent", tail = 200, signal) {
+    const query = new URLSearchParams({ stream, tail: String(tail) });
+    return request(`${generationPath(id, "/logs")}?${query}`, { signal });
+  },
+  generationDiff(id, signal) {
+    return request(generationPath(id, "/diff"), { signal, text: true });
   },
 };
