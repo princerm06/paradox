@@ -22,10 +22,6 @@ RECIPES = REPO / "tests" / "fixtures" / "scripted_agent"
 TERMINAL = {"succeeded", "failed", "cancelled"}
 CHECK_ORDER = ["agent", "guard", "compile", "tests", "boot", "smoke"]
 
-# strict=True: once a part lands these XPASS and fail. That's the signal to remove the marker.
-pending_m20 = pytest.mark.xfail(strict=True, reason="M2.0 safe local dev (CORS env, token, launcher) not implemented yet")
-pending_gen = pytest.mark.xfail(strict=True, reason="M2 generation API not implemented yet")
-
 
 @pytest.fixture
 def gen(engine_factory):
@@ -59,7 +55,6 @@ def root_ranking(e):
 
 # M2.0: safe local development ----------------------------------------------------------
 
-@pending_m20
 def test_cors_origins_are_configurable(engine_factory):
     e = engine_factory(env={"PARADOX_CORS_ORIGINS": "http://fork.example:4000"})
 
@@ -75,7 +70,6 @@ def test_cors_origins_are_configurable(engine_factory):
     assert preflight("http://localhost:5173").headers.get("access-control-allow-origin") is None
 
 
-@pending_m20
 def test_token_required_for_mutating_api_calls_only(engine_factory):
     e = engine_factory(env={"PARADOX_TOKEN": "s3cret-token"})
     root = e.root_id()  # GET needs no token
@@ -88,7 +82,6 @@ def test_token_required_for_mutating_api_calls_only(engine_factory):
     assert e.http.post("/app/api/posts", json={"author": "a", "content": "iframe traffic"}).status_code == 201
 
 
-@pending_m20
 def test_launcher_refuses_public_bind_without_token(tmp_path):
     env = {**os.environ, "PYTHONPATH": str(REPO), "PARADOX_STATE_DIR": str(tmp_path / "s")}
     env.pop("PARADOX_TOKEN", None)
@@ -100,7 +93,6 @@ def test_launcher_refuses_public_bind_without_token(tmp_path):
 
 # M2: AI-generated futures -----------------------------------------------------------------
 
-@pending_gen
 def test_ai_future_success_keeps_original_untouched(gen):
     require_generation_api(gen)
     source_before = tree_digest(DEMO_SOURCE)
@@ -146,7 +138,6 @@ def test_ai_future_success_keeps_original_untouched(gen):
     assert gen.call("POST", f"/api/timelines/{child['id']}/confirm")["status"] == "confirmed"
 
 
-@pending_gen
 def test_generation_from_inactive_parent_uses_its_saved_state(gen):
     require_generation_api(gen)
     root = gen.root_id()
@@ -160,7 +151,6 @@ def test_generation_from_inactive_parent_uses_its_saved_state(gen):
     assert "only in side" in gen.contents() and gen.feed()["ordering"] == "popular"
 
 
-@pending_gen
 def test_activate_on_success(gen):
     require_generation_api(gen)
     g = wait(gen, start(gen, "popular please", activate_on_success=True)["id"])
@@ -169,7 +159,6 @@ def test_activate_on_success(gen):
     assert gen.feed()["ordering"] == "popular"
 
 
-@pending_gen
 @pytest.mark.parametrize("prompt,stage", [
     ("Please break the app", "compile"),
     ("Add a failing test", "tests"),
@@ -195,7 +184,6 @@ def test_failed_generation_creates_no_timeline_and_preserves_original(gen, promp
     assert gen.active_id() == root and gen.feed()["ordering"] == "chronological"
 
 
-@pending_gen
 def test_user_keeps_working_while_generation_runs(gen):
     require_generation_api(gen)
     root = gen.root_id()
@@ -212,7 +200,6 @@ def test_user_keeps_working_while_generation_runs(gen):
     assert "written during generation" in gen.contents()
 
 
-@pending_gen
 def test_cancel_generation(gen):
     require_generation_api(gen)
     before = set(gen.timelines())
@@ -225,7 +212,6 @@ def test_cancel_generation(gen):
     assert set(gen.timelines()) == before
 
 
-@pending_gen
 def test_engine_crash_mid_generation_marks_it_failed(engine_factory):
     env = {"PARADOX_AGENT": "scripted", "PARADOX_SCRIPTED_RECIPES": str(RECIPES)}
     first = engine_factory(env=env)
@@ -241,7 +227,6 @@ def test_engine_crash_mid_generation_marks_it_failed(engine_factory):
     assert second.feed()["ordering"] == "chronological"
 
 
-@pending_gen
 def test_request_validation_errors(gen):
     require_generation_api(gen)
     assert gen.http.post("/api/generations", json={"parent_id": "nope", "prompt": "popular", "provider": "scripted"}).status_code == 404
@@ -255,7 +240,6 @@ def test_request_validation_errors(gen):
     assert listing["generations"] == []
 
 
-@pending_gen
 def test_unavailable_provider_is_rejected_up_front(gen):
     require_generation_api(gen)
     droid = next(p for p in gen.call("GET", "/api/agents")["providers"] if p["id"] == "droid")
