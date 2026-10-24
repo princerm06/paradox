@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { assertBrowserTarget, installFirewall, verifyIsolatedEngine, type Firewall } from "./guard.ts";
+import { assertBrowserTarget, holdNextGenerationResponse, installFirewall, verifyIsolatedEngine, type Firewall } from "./guard.ts";
 import { E2E_ENGINE as ENGINE } from "./target.mjs";
 
 const SHOTS = process.env.PARADOX_E2E_SHOTS ?? "";
@@ -215,4 +215,153 @@ test("refresh during a generation reattaches it, and Confirm never activates", a
   expect((await engineState(page)).active_timeline_id).toBe(liveBefore);
   await expect(page.getByText("Live · Original")).toBeVisible();
   await shot(page, "iso-16-confirmed-not-live");
+});
+
+type EngineGeneration = { id: string; prompt: string; status: string; parent_id: string; provider: string; activate_on_success: boolean };
+
+async function engineGenerations(page: Page) {
+  return ((await (await page.request.get(`${ENGINE}/api/generations`)).json()) as { generations: EngineGeneration[] }).generations;
+}
+
+async function waitForStatus(page: Page, id: string, statuses: string[]) {
+  await expect.poll(async () => (await engineGenerations(page)).find((item) => item.id === id)?.status, { timeout: 60_000 }).toMatch(new RegExp(`^(${statuses.join("|")})$`));
+}
+
+const UNCONFIRMED = "did not confirm this was the tab's own request";
+
+test("A3: reload before the generation response shows the engine's new record, never the previous submission", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/^Live · /).first()).toBeVisible();
+  const strip = page.locator(".submission");
+  await generate(page, "popular baseline before delay");
+  await expect(strip).toContainText("The new future is pending", { timeout: 60_000 });
+  const before = await engineGenerations(page);
+
+  const held = await holdNextGenerationResponse(page, firewall);
+  await generate(page, "slow delayed response");
+  const accepted = await held.accepted;
+  expect(accepted.status).toBe(202);
+  const createdId = String(accepted.body.id);
+  const during = await engineGenerations(page);
+  expect(during.filter((item) => item.prompt === "slow delayed response").map((item) => item.id)).toEqual([createdId]);
+  await expect(page.getByRole("button", { name: /Starting/ })).toBeVisible();
+  await shot(page, "iso-17-held-response");
+
+  await page.reload();
+  await expect(strip).toContainText("slow delayed response");
+  await expect(strip).not.toContainText("popular baseline before delay");
+  await expect(strip).toContainText("Recovered without the engine's response");
+  await expect(strip).toContainText(UNCONFIRMED);
+  await shot(page, "iso-18-recovered-after-reload");
+  await mutate(page, () => strip.getByRole("button", { name: "Cancel" }).click());
+  await expect(strip).toContainText("Cancelled", { timeout: 20_000 });
+  await waitForStatus(page, createdId, ["cancelled"]);
+
+  const after = await engineGenerations(page);
+  expect(after.filter((item) => item.prompt === "slow delayed response")).toHaveLength(1);
+  for (const item of before) expect(after.some((next) => next.id === item.id)).toBe(true);
+  expect(firewall.generations.map((body) => body.prompt)).toEqual(["popular baseline before delay", "slow delayed response"]);
+});
+
+test("A3: a run that completes during the reload is shown with its real outcome", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/^Live · /).first()).toBeVisible();
+  const held = await holdNextGenerationResponse(page, firewall);
+  await generate(page, "popular finished during reload");
+  const createdId = String((await held.accepted).body.id);
+  await waitForStatus(page, createdId, ["succeeded"]);
+  await page.reload();
+  const strip = page.locator(".submission");
+  await expect(strip).toContainText("popular finished during reload");
+  await expect(strip).toContainText("The new future is pending");
+  await expect(strip).toContainText(UNCONFIRMED);
+  await expect(strip.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+  expect(firewall.generations).toHaveLength(1);
+});
+
+test("A3: identical concurrent submissions are listed, not guessed, and nothing is resubmitted", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/^Live · /).first()).toBeVisible();
+  const held = await holdNextGenerationResponse(page, firewall);
+  await generate(page, "slow twin request");
+  const mine = (await held.accepted).body as unknown as EngineGeneration;
+  await assertBrowserTarget(page);
+  const otherStatus = await page.evaluate(
+    async ({ engine, body }) => (await fetch(`${engine}/api/generations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).status,
+    { engine: ENGINE, body: { parent_id: mine.parent_id, prompt: mine.prompt, provider: mine.provider, activate_on_success: mine.activate_on_success } },
+  );
+  expect(otherStatus).toBe(202);
+  await page.reload();
+
+  const panel = page.getByRole("group", { name: "Unconfirmed submission" });
+  await expect(panel).toContainText("2 engine records match");
+  await expect(page.locator(".submission")).toHaveCount(0);
+  await shot(page, "iso-19-ambiguous-candidates");
+  const rows = panel.getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+  for (let index = 0; index < 2; index += 1) {
+    const cancel = rows.nth(index).getByRole("button", { name: "Cancel" });
+    if (await cancel.count()) await mutate(page, () => cancel.click());
+  }
+  const twins = (await engineGenerations(page)).filter((item) => item.prompt === "slow twin request");
+  expect(twins).toHaveLength(2);
+  for (const twin of twins) await waitForStatus(page, twin.id, ["cancelled", "succeeded", "failed"]);
+  await rows.first().getByRole("button", { name: "Track this one" }).click();
+  await expect(page.locator(".submission")).toContainText(UNCONFIRMED);
+  await expect(panel).toHaveCount(0);
+  expect(firewall.generations).toHaveLength(2);
+  expect((await engineGenerations(page)).filter((item) => item.prompt === "slow twin request")).toHaveLength(2);
+});
+
+test("A3: a response delivered while another engine is shown is kept for its own engine only", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/^Live · /).first()).toBeVisible();
+  const held = await holdNextGenerationResponse(page, firewall);
+  await generate(page, "slow engine switch check");
+  const createdId = String((await held.accepted).body.id);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settings = page.getByRole("dialog", { name: "Studio settings" });
+  await settings.getByLabel("Engine URL").fill("http://127.0.0.1:8099");
+  await settings.getByRole("button", { name: "Use" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-paradox-engine", "http://127.0.0.1:8099");
+  await expect(page.getByRole("group", { name: "Unconfirmed submission" })).toHaveCount(0);
+  await expect(page.locator(".submission")).toHaveCount(0);
+  await held.release();
+
+  if (!(await settings.isVisible())) await page.getByRole("button", { name: "Settings" }).click();
+  await settings.getByRole("button", { name: "Reset" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-paradox-engine", ENGINE);
+  await assertBrowserTarget(page);
+  const strip = page.locator(".submission");
+  await expect(strip).toContainText("slow engine switch check");
+  await expect(strip).toContainText("Restored after reload from the engine's record");
+  await expect(strip).not.toContainText(UNCONFIRMED);
+  await waitForStatus(page, createdId, ["succeeded", "failed", "cancelled"]);
+  expect(firewall.generations).toHaveLength(1);
+  expect((await engineGenerations(page)).filter((item) => item.prompt === "slow engine switch check")).toHaveLength(1);
+});
+
+test("A1/A2: the composer starts on scripted and the live parent, and inspecting a child does not move it", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/^Live · /).first()).toBeVisible();
+  const live = (await engineState(page)).active_timeline_id;
+  await expect(page.getByLabel("Agent provider")).toHaveValue("scripted");
+  await expect(page.getByLabel("Parent future")).toHaveValue(live);
+  await generate(page, "popular child for parent check");
+  const strip = page.locator(".submission");
+  await expect(strip).toContainText("The new future is pending", { timeout: 60_000 });
+  await strip.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByRole("complementary", { name: "Future inspector" }).getByRole("heading", { name: "popular child for parent check" })).toBeVisible();
+  await expect(page.getByLabel("Parent future")).toHaveValue(live);
+  await page.reload();
+  await expect(page.getByLabel("Parent future")).toHaveValue(live);
+  const sent = page.waitForRequest((request) => request.method() === "POST" && request.url() === `${ENGINE}/api/generations`);
+  await page.getByLabel("What would you like to change?").fill("break the app parent check");
+  await expect(page.getByLabel("Agent provider")).toHaveValue("scripted");
+  await assertBrowserTarget(page);
+  await page.getByRole("button", { name: /Generate future/ }).click();
+  expect((await sent).postDataJSON()).toMatchObject({ parent_id: live, provider: "scripted" });
+  expect((await engineState(page)).active_timeline_id).toBe(live);
+  await expect(strip).toContainText("Failed", { timeout: 60_000 });
 });
