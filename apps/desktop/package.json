@@ -1,0 +1,13 @@
+{
+  "name": "paradox-desktop-poc",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tauri 2 desktop shell proof of concept for the Paradox studio (scripted engine only).",
+  "scripts": {
+    "dist:placeholder": "rm -rf dist && mkdir -p dist && cp placeholder/index.html dist/index.html",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

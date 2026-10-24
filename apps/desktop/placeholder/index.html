@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Paradox desktop (placeholder)</title>
+<style>body{font:15px -apple-system,system-ui;background:#0b0d14;color:#e6e8ef;padding:32px}code{color:#9ae6b4}</style>
+<h1>Paradox desktop shell: sidecar check</h1>
+<p>This placeholder stands in for the studio build until bundling is agreed.</p>
+<pre id="out">checking…</pre>
+<script>
+const base = "http://127.0.0.1:8100";
+const token = localStorage.getItem("paradox.token:" + base) || "";
+const out = document.getElementById("out");
+(async () => {
+  const lines = [`origin: ${location.origin}`, `token injected: ${token.length === 48 ? "yes (48 hex chars)" : "NO"}`];
+  try {
+    const health = await (await fetch(base + "/api/health")).json();
+    lines.push(`health: ${JSON.stringify(health)}`);
+    const agents = await (await fetch(base + "/api/agents")).json();
+    lines.push(`default provider: ${agents.default}; droid available: ${agents.providers.find((p) => p.id === "droid").available}`);
+    const list = await (await fetch(base + "/api/timelines")).json();
+    const root = list.active_timeline_id;
+    const noTok = await fetch(`${base}/api/timelines/${root}/snapshots`, { method: "POST" });
+    lines.push(`POST without token: ${noTok.status}`);
+    const withTok = await fetch(`${base}/api/timelines/${root}/snapshots`, { method: "POST", headers: { Authorization: "Bearer " + token } });
+    lines.push(`POST with token: ${withTok.status}`);
+  } catch (error) {
+    lines.push("engine error: " + error);
+  }
+  out.textContent = lines.join("\n");
+  // Test hook: report to a local listener if one is running (ignored otherwise).
+  fetch("http://127.0.0.1:5191/report?" + encodeURIComponent(lines.join("\n")), { mode: "no-cors" }).catch(() => {});
+})();
+</script>
