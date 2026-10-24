@@ -156,7 +156,8 @@ def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runti
 
     @application.get("/api/health")
     def health():
-        return {"status": "ok" if engine.runtime.running else "degraded", "active_timeline_id": engine.active_id, "runtime_running": engine.runtime.running}
+        with engine.gate:
+            return {"status": "ok" if engine.runtime.running else "degraded", "active_timeline_id": engine.active_id, "runtime_running": engine.runtime.running}
 
     @application.get("/api/timelines", response_model=TimelineList)
     def timelines(request: Request):
