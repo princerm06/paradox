@@ -43,6 +43,20 @@ def publish(client, content):
     assert response.status_code == 201, response.text
 
 
+def test_health_reads_storage_under_engine_gate(client, monkeypatch):
+    engine = client.app.state.engine
+    original = engine.storage.setting
+
+    def checked_setting(key):
+        assert engine.gate.lock._is_owned()
+        return original(key)
+
+    monkeypatch.setattr(engine.storage, "setting", checked_setting)
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["runtime_running"] is True
+
+
 def test_popular_sprout_changes_only_working_code_and_restores_it(client):
     engine = client.app.state.engine
     original = (SOURCE / "ranking.py").read_bytes()
