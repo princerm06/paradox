@@ -20,8 +20,8 @@ The production call chain is:
    `PARADOX_DROID_MODEL`), checks the session's `toolExecutionMode`, and calls
    **`session.listTools`** before streaming. SDK **`listModels`** first checks
    availability and organization restrictions; the initialized model must match
-   the requested ID. Read must report `allowed === true`; Edit and Create must
-   be registered (either allowed flag value is accepted for approval under Off).
+   the requested ID. Read, Edit and Create must each report `allowed === true`.
+   Registered writes with `allowed: false` are not sufficient (see run 2).
    Script-only/unknown-mode/disallowed-file-tool
    sessions fail closed rather than paying for a tool-less model response.
 4. It iterates **`session.stream(prompt, {abortSignal})`**. SDK messages become
@@ -166,6 +166,32 @@ Dependency audit reported one moderate and two high advisories (SDK/transitive
 uuid/zod); no forced SDK downgrade or dependency rewrite was performed.
 
 ## Paid-run failure and offline fix
+
+### Second paid run invalidated Option 1; strict gate restored
+
+User-run evidence: `.venv/droid-proof-2/http-evidence.json`, generation
+`f98456d7-0e05-48e0-ba95-8d1d786afc13`, SDK session
+`58455bca-1df3-4822-a5ca-9abf9886fbf6`. SDK exit 0, generation failed at
+`guard` with `Agent made no code changes`; timeline association null. Reported
+cost **133,563 Factory credits** (421 input / 12,851 output tokens).
+
+The run-2 preflight logged Read allowed/defaultAllowed true/true, Edit and
+Create false/false. The model had Read, LS, Grep, Glob, TodoWrite and ToolSearch,
+searched unsuccessfully for write tools, then returned code as prose. No
+permission request was issued. Registration did NOT expose write tools:
+`allowed: false` meant hidden from the model, not awaiting permission approval.
+Off is effectively read-only in this configuration. The integration lead's
+Option 1 recommendation and our accompanying approval-needed interpretation
+were incorrect; the earlier strict gate was correct. Historical Option 1
+sections below are retained as an audit trail, not current guidance.
+
+Restored strict preflight: Read/Edit/Create must ALL have `allowed === true`
+before streaming; missing/disallowed tools fail at existing stage `agent`,
+with session closure and no model turn. Exact model/mode gates and both metadata
+flags in logs remain. No autonomy change or security relaxation was implemented.
+Strict-restoration offline tests: **41 Node passed** (including build),
+**46 targeted Python passed in 36.44s** with `FACTORY_API_KEY` unset. The
+run-2 catalog regression now rejects before streaming and closes the session.
 
 - Generation: `bd3c06b0-c092-4724-8fc0-e07def78261a`.
 - Official SDK session: `c73bc85d-918f-4f68-bcaa-ae2a69d62f0c`.

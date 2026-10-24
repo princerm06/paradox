@@ -140,9 +140,9 @@ It does not inherit an arbitrary CLI model default. Before `session.stream`, it
 uses SDK `listModels({cwd, includeDisabled: true})` to reject unavailable or
 organization-disabled models, verifies the initialized model ID matches the
 requested ID, checks `session.settings.toolExecutionMode === 'direct_only'`,
-and requires `session.listTools` to report **Read with `allowed === true`,
-plus registered Edit and Create entries**. Edit/Create may report either
-`allowed: true` or `allowed: false` (approval required under Off). Missing or
+and requires `session.listTools` to report **Read, Edit and Create each with
+`allowed === true`**. The second paid run showed that registered writes with
+`allowed: false` are hidden from the model, not awaiting handler approval. Missing or
 unknown mode metadata fails closed. Script-only sessions
 fail with a clear configuration error before streaming: allowing Script would
 bypass the adapter's file-only permission policy. `AutonomyLevel.Off` remains

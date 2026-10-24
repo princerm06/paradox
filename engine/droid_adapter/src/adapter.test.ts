@@ -395,22 +395,24 @@ describe('runAdapter', () => {
     });
   }
 
-  it('rejects a registered but disallowed Read before streaming', async () => {
-    const h = harness([]);
-    h.deps.createSession = async () => ({
-      id: 'read-blocked',
-      settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
-      async listTools() { return ['Read', 'Edit', 'Create'].map((id) => ({ id, allowed: id !== 'Read' })); },
-      async *stream() { assert.fail('must not spend a turn'); },
-      async close() { h.captured.closed = true; },
-    } as unknown as FakeSession);
-    assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
-    assert.equal(h.captured.closed, true);
-    assert.match((h.emitted.at(-1) as { summary: string }).summary, /Read must be allowed/);
-  });
+  for (const blocked of ['Read', 'Edit', 'Create']) {
+    it(`rejects a registered but disallowed ${blocked} before streaming`, async () => {
+      const h = harness([]);
+      h.deps.createSession = async () => ({
+        id: 'read-blocked',
+        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+        async listTools() { return ['Read', 'Edit', 'Create'].map((id) => ({ id, allowed: id !== blocked })); },
+        async *stream() { assert.fail('must not spend a turn'); },
+        async close() { h.captured.closed = true; },
+      } as unknown as FakeSession);
+      assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
+      assert.equal(h.captured.closed, true);
+      assert.match((h.emitted.at(-1) as { summary: string }).summary, /must each report allowed=true/);
+    });
+  }
 
   for (const allowed of [true, false]) {
-    it(`streams with registered Edit/Create allowed=${allowed} and logs both metadata flags`, async () => {
+    it(`${allowed ? 'streams' : 'rejects run-2 catalog'} with Edit/Create allowed=${allowed} and logs both metadata flags`, async () => {
       const h = harness([]);
       let streamed = false;
       h.deps.createSession = async () => ({
@@ -423,9 +425,10 @@ describe('runAdapter', () => {
         },
         async close() { h.captured.closed = true; },
       } as unknown as FakeSession);
-      assert.equal(await runAdapter(input, h.deps), EXIT_OK);
-      assert.equal(streamed, true);
+      assert.equal(await runAdapter(input, h.deps), allowed ? EXIT_OK : EXIT_RUN_FAILED);
+      assert.equal(streamed, allowed);
       assert.equal(h.captured.closed, true);
+      if (!allowed) assert.equal((h.emitted.at(-1) as { usage: { factory_credits: null } }).usage.factory_credits, null);
       const logs = h.emitted.filter((message) => message.type === 'log').map((message) => message.message).join('\n');
       for (const id of ['Edit', 'Create']) assert.ok(logs.includes(`${id} (allowed=${allowed}, defaultAllowed=false)`));
       assert.ok(logs.includes('Read (allowed=true, defaultAllowed=true)'));
@@ -518,7 +521,7 @@ describe('runAdapter', () => {
     h.deps.createSession = async (options) => ({
       id: 'direct-edit-session',
       settings: { modelId: options.modelId, toolExecutionMode: 'direct_only' },
-      async listTools() { return [{ id: 'Read', allowed: true }, { id: 'Create', allowed: false }, { id: 'Edit', allowed: false }]; },
+      async listTools() { return [{ id: 'Read', allowed: true }, { id: 'Create', allowed: true }, { id: 'Edit', allowed: true }]; },
       async *stream() {
         assert.equal(options.autonomyLevel, 'off');
         assert.equal(await options.permissionHandler!(request({ details: { type: 'create', filePath: target } }) as never), 'proceed_once');
