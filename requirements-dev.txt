@@ -1,0 +1,7 @@
+# Shared dev env for engine + demo app + tests (Python 3.9+).
+# Setup: python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27
+pydantic>=2
+pytest>=8
