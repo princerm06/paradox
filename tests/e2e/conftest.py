@@ -62,8 +62,9 @@ def tree_digest(root: Path) -> Dict[str, str]:
 class Engine:
     """A running engine process plus HTTP helpers that follow the contract."""
 
-    def __init__(self, state_dir: Path, log_path: Path):
+    def __init__(self, state_dir: Path, log_path: Path, env: Optional[Dict[str, str]] = None):
         self.state_dir = state_dir
+        self.extra_env = dict(env or {})
         self.log_path = log_path
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
@@ -74,6 +75,7 @@ class Engine:
     def start(self, timeout: float = 30) -> None:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(REPO)
+        env.update(self.extra_env)
         self._log = self.log_path.open("ab")
         self.proc = subprocess.Popen(
             [sys.executable, "-c", LAUNCHER, str(self.state_dir), str(self.port)],
@@ -188,8 +190,8 @@ class Engine:
 def engine_factory(tmp_path):
     engines: List[Engine] = []
 
-    def make(state_dir: Optional[Path] = None) -> Engine:
-        e = Engine(state_dir or tmp_path / "state", tmp_path / f"engine{len(engines)}.log")
+    def make(state_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> Engine:
+        e = Engine(state_dir or tmp_path / "state", tmp_path / f"engine{len(engines)}.log", env)
         engines.append(e)
         e.start()
         return e
