@@ -320,6 +320,7 @@ export function parseInput(raw: string): AdapterInput {
 
 export interface RunnerDeps {
   createSession: (options: CreateSessionOptions) => Promise<Pick<DroidSession, 'id' | 'settings' | 'listTools' | 'stream' | 'close'>>;
+  listModels: typeof import('@factory/droid-sdk/node')['listModels'];
   /** SDK `AutonomyLevel.Off`; injected so tests need not load the SDK. */
   autonomyOff: CreateSessionOptions['autonomyLevel'];
   emit: (message: AdapterMessage) => void;
@@ -349,11 +350,25 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
   }
 
   const root = input.cwd;
+  const modelId = env.PARADOX_DROID_MODEL?.trim() || DEFAULT_MODEL_ID;
   let session: Awaited<ReturnType<RunnerDeps['createSession']>> | null = null;
   try {
+    let models: Awaited<ReturnType<RunnerDeps['listModels']>>;
+    try {
+      models = await deps.listModels({ cwd: root, includeDisabled: true });
+    } catch (error) {
+      throw new Error(`Cannot verify Droid model "${modelId}" availability: ${errorText(error)}`);
+    }
+    const selectedModel = models.find((model) => model.id === modelId);
+    if (!selectedModel) {
+      throw new Error(`Droid model "${modelId}" is unavailable. Set PARADOX_DROID_MODEL to a selectable direct-tool model.`);
+    }
+    if (selectedModel.disabled) {
+      throw new Error(`Droid model "${modelId}" is disabled: ${selectedModel.disabledReason}. Check organization model permissions.`);
+    }
     session = await deps.createSession({
       cwd: root,
-      modelId: env.PARADOX_DROID_MODEL?.trim() || DEFAULT_MODEL_ID,
+      modelId,
       autonomyLevel: deps.autonomyOff,
       disabledToolIds: [...DISABLED_TOOL_IDS],
       autoRejectPermissionRequests: false,
@@ -367,16 +382,24 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
       // No askUserHandler: the SDK declines AskUser requests without one.
     });
     log(`session started: ${session.id}`);
-    const mode = session.settings.toolExecutionMode;
-    log(`session model: ${session.settings.modelId}; tool execution mode: ${mode ?? 'unknown'}`);
+    const mode = session.settings?.toolExecutionMode;
+    log(`session model: ${session.settings?.modelId ?? 'unknown'}; tool execution mode: ${mode ?? 'unknown'}`);
     if (mode !== 'direct_only') {
-      throw new Error('Droid session requires direct_only file tools; Script is intentionally disabled. Set PARADOX_DROID_MODEL to a direct-tool model.');
+      throw new Error(`Droid model "${modelId}" has effective toolExecutionMode "${mode ?? 'unknown'}"; direct_only is required. Script remains disabled. Select a compatible PARADOX_DROID_MODEL or update the SDK/CLI if mode metadata is missing.`);
     }
-    const tools = await session.listTools({ toolIds: ['Read', 'Create', 'Edit', 'ApplyPatch'] });
+    if (session.settings.modelId !== modelId) {
+      throw new Error(`Requested Droid model "${modelId}" but initialized "${session.settings.modelId ?? 'unknown'}"; refusing a silent model substitution.`);
+    }
+    let tools: Awaited<ReturnType<DroidSession['listTools']>>;
+    try {
+      tools = await session.listTools({ toolIds: ['Read', 'Edit', 'Create'] });
+    } catch (error) {
+      throw new Error(`Cannot verify direct file tools for Droid model "${modelId}" (mode ${mode}): ${errorText(error)}`);
+    }
     log(`file tool catalog: ${tools.map((tool) => `${tool.id} (allowed=${tool.allowed})`).join(', ')}`);
-    if (!tools.some((tool) => tool.id === 'Read' && tool.allowed) ||
-        !(tools.some((tool) => tool.id === 'ApplyPatch') || ['Create', 'Edit'].every((id) => tools.some((tool) => tool.id === id)))) {
-      throw new Error('Droid session has no usable direct file-tool catalog; refusing to spend a model turn without read/write tools.');
+    const unavailableTools = ['Read', 'Edit', 'Create'].filter((id) => !tools.some((tool) => tool.id === id && tool.allowed === true));
+    if (unavailableTools.length) {
+      throw new Error(`Droid model "${modelId}" (mode ${mode}) does not allow required file tools: ${unavailableTools.join(', ')}. Check model/organization tool permissions; AutonomyLevel.Off and shell restrictions remain unchanged.`);
     }
 
     for await (const message of session.stream(input.prompt, { abortSignal: deps.abortSignal })) {
@@ -513,6 +536,7 @@ export async function main(argv: string[]): Promise<number> {
   const createSession: typeof CreateSessionFn = sdk.createSession;
   return runAdapter(input, {
     createSession,
+    listModels: sdk.listModels,
     autonomyOff: sdk.AutonomyLevel.Off,
     emit: writeJsonLine,
     diagnostic: writeDiagnostic,

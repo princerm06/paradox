@@ -137,13 +137,22 @@ requests, and unknown types. Each decision is logged.
 The adapter explicitly selects `claude-sonnet-4-6` by default; set
 `PARADOX_DROID_MODEL` to select another model with a **direct file-tool** surface.
 It does not inherit an arbitrary CLI model default. Before `session.stream`, it
-checks `session.settings.toolExecutionMode === 'direct_only'` and inspects
-`session.listTools` for Read and Create/Edit or ApplyPatch. Script-only sessions
+uses SDK `listModels({cwd, includeDisabled: true})` to reject unavailable or
+organization-disabled models, verifies the initialized model ID matches the
+requested ID, checks `session.settings.toolExecutionMode === 'direct_only'`,
+and requires `session.listTools` to report **Read, Edit, and Create each with
+`allowed === true`**. Missing or unknown mode metadata fails closed. Script-only sessions
 fail with a clear configuration error before streaming: allowing Script would
 bypass the adapter's file-only permission policy. `AutonomyLevel.Off` remains
 enabled; direct edit/create permission requests still receive `proceed_once`
-only for valid paths. The tool catalog's edit `allowed: false` can mean
-approval is required, not that the edit tool is absent.
+only for valid paths. Catalog presence alone is insufficient; ApplyPatch is
+not a substitute for the three required tools. The offline CLI read-only
+catalog marks Create/Edit blocked: if the initialized SDK session does too,
+the adapter deliberately refuses to stream. This strict preflight may reject
+otherwise approval-gated configurations; it does not raise autonomy or query
+tools with hypothetical weaker settings. See `VERIFICATION.md` for evidence.
+Model/tool discovery uses metadata RPCs, not model turns; `/api/agents` does
+not make those authenticated calls and remains an offline prerequisite probe.
 
 ## Known limitations
 

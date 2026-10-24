@@ -11,6 +11,15 @@ from engine.api import create_app
 from engine import providers
 from engine.jobs import JobControl, scrubbed_environment
 from engine.providers import Providers
+from engine.validation import changes, guard
+
+
+def test_sdk_success_without_source_edits_still_fails_guard():
+    source = {"demo_app/ranking.py": b"ORDERING = 'chronological'\n"}
+    changed, patch = changes(source, dict(source))
+    assert patch == ""
+    with pytest.raises(ValueError, match="Agent made no code changes"):
+        guard(source, dict(source), changed)
 
 
 @pytest.fixture

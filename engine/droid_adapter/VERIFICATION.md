@@ -18,7 +18,10 @@ The production call chain is:
    **`permissionHandler`**, **`abortSignal`**, and disabled built-in skills.
    It explicitly selects `modelId` (default `claude-sonnet-4-6`, override
    `PARADOX_DROID_MODEL`), checks the session's `toolExecutionMode`, and calls
-   **`session.listTools`** before streaming. Script-only/missing-file-tool
+   **`session.listTools`** before streaming. SDK **`listModels`** first checks
+   availability and organization restrictions; the initialized model must match
+   the requested ID. Read, Edit, and Create must each report `allowed === true`.
+   Script-only/unknown-mode/disallowed-file-tool
    sessions fail closed rather than paying for a tool-less model response.
 4. It iterates **`session.stream(prompt, {abortSignal})`**. SDK messages become
    JSONL logs; the final result maps **`sessionId`**, **`tokenUsage.inputTokens`**,
@@ -168,6 +171,8 @@ uuid/zod); no forced SDK downgrade or dependency rewrite was performed.
 - Saved HTTP proof: `.venv/droid-proof-1/http-evidence.json`.
 - Result: SDK exit 0, followed by generation `failed`, stage `guard`,
   `Agent made no code changes`; diff/files empty, no timeline adopted.
+- Reported cost: **5,222 Factory credits**, from the saved SDK usage result
+  (`factory_credits: 5222`); this paid run was not a successful generation.
 - Observed HTTP statuses: queued, preparing, generating, failed. Validating
   was transient and was not observed by polling; the stored evaluation includes
   the passed agent check and failed guard check.
@@ -221,24 +226,69 @@ catalog metadata, and rejects script-only/unknown modes or missing read/write
 tools **before `session.stream`**. It never enables Script or shell execution
 and never silently switches models after a failure.
 
-`AutonomyLevel.Off` is retained. With direct tools, writes can ask the existing
-permission handler for `proceed_once`. A catalog edit entry marked
-`allowed: false` may indicate required approval; the preflight deliberately
-does not equate that with an absent editing tool. A mocked SDK regression
-performs a real temporary-file write only after that handler approves it.
+`AutonomyLevel.Off` is retained. The mandatory preflight requires Read, Edit,
+and Create each with `allowed === true`, not just catalog presence. An
+ApplyPatch-only catalog is insufficient. Even if `allowed: false` indicates
+an approval-gated tool rather than an absent one, this adapter fails closed;
+it never probes hypothetical weaker autonomy settings. A mocked SDK regression
+performs a temporary-file write only after the existing handler approves it.
 
 Offline local CLI catalog checks used `droid exec --list-tools --model ...`
 under macOS `sandbox-exec` with **all network denied**. Sonnet's catalog includes
 Read/Create/Edit; GPT's includes Read/ApplyPatch. This is catalog inspection,
 not a model turn or authenticated end-to-end proof. The saved `script_only`
 setting explains why catalog entries alone were insufficient in the failed
-session; the new preflight checks both mode and catalog.
+session; the new preflight checks both effective mode and allowed flags.
+**Limitation:** the local read-only Sonnet catalog marks Create/Edit blocked.
+If SDK session metadata agrees, the strict preflight will reject this default
+configuration without a model turn. The catalog proves the model has direct
+file-tool schemas, not that this account/session is permitted to use them.
+No authenticated model discovery or new live turn was run during this fix.
+
+### Exact installed SDK metadata implementation (0.10.0)
+
+Paths below are relative to
+`engine/droid_adapter/node_modules/@factory/droid-sdk/dist/`:
+
+- `node.d.ts:844`: `listModels` lists models selectable by the spawned CLI;
+  `includeDisabled: true` includes organization-disabled entries and reasons.
+- `node.mjs:4627`: SDK `listModels` creates a configured client, invokes
+  `client.listModels`, and closes the client in `finally`.
+- `node.mjs:1316`: the underlying call sends `droid.list_models`.
+- `node.mjs:4055`: `session.listTools` maps CLI `llmId`/`currentlyAllowed`
+  to SDK `id`/`allowed`; `node.mjs:1385` sends `droid.list_tools`.
+- `index-DWBA4zgW.d.ts:499`: execution modes are `direct_only` and
+  `script_only` (tools exposed directly versus through Script).
+- `node.mjs:3647`: session initialization forwards `modelId`; the public
+  initialization/settings APIs do not offer an execution-mode override.
+
+Neither metadata RPC adds a user message or calls `session.stream`: source
+inspection shows no model turn. They can require authentication/network for
+metadata; no inference credits are reported for preflight, and error results
+leave usage null rather than inventing zero billed credits. `/api/agents`
+continues using only the local import/CLI/version/key-presence probe. Actual
+account permission is checked by `listModels` before session creation and by
+the initialized session's effective model/mode/tools before streaming.
 
 Regression coverage reproduces the exact script-only configuration, asserts
 `stream` is never called for it or an empty catalog, checks explicit model
-selection/override, and proves mocked direct writes still work with Off while
-Script/Execute remain disabled. The real-change guard is unchanged. The four
-new SDK regression cases bring the Node suite to **23 passed**.
+selection/override, absent/organization-disabled models, unknown modes,
+disallowed Read/Edit/Create, model substitution, metadata failures, preflight
+ordering, closure and null preflight usage. Mocked direct writes work with Off
+while Script/WaitForScript/Execute remain disabled. A Python regression confirms
+unchanged source still fails the real-change guard after SDK success.
+
+Review-hardening offline commands (the earlier counts above are historical):
+
+```sh
+npm --prefix engine/droid_adapter test
+env -u FACTORY_API_KEY .venv/bin/python -m pytest tests/test_droid_provider.py tests/test_generations.py -q
+```
+
+Results for this review hardening: **34 Node tests passed** (TypeScript build
+included), **46 Python tests passed in 35.57 seconds**, and `git diff --check`
+passed. All SDK session/model/tool interactions in these tests are mocked;
+the Python real-runtime traversal checks use local fixtures, not paid Droid.
 
 A second user-approved run is necessary to claim a successful real Factory
 generation after the fix, not to diagnose this failure or review the offline
