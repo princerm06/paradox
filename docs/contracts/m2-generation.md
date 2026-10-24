@@ -165,38 +165,40 @@ Errors:
 ## 4. Providers
 | id | How | Notes |
 |---|---|---|
-| `droid` | **Official Factory Droid TypeScript SDK** (`@factory/droid-sdk@0.10.0`, `createSession` + `session.stream`) run by the Node adapter `engine/agents/droid_sdk/runner.mjs`, which talks to the engine over a JSON stdin / JSONL stdout interface (see §4.1) | `autonomyLevel: low`. A permission handler cancels anything that isn't a file edit or create, and ask-user requests are declined. Requires Node ≥20, `npm ci` in the adapter dir, the `droid` CLI on PATH (the SDK spawns it), and `FACTORY_API_KEY`. A `success` result doesn't mean the change works, so we validate ourselves. |
+| `droid` | **Official Factory Droid TypeScript SDK** (`@factory/droid-sdk@0.10.0`: `createSession` + `session.stream`), run by the Node adapter `engine/droid_adapter/` (`dist/adapter.js`), which talks to the engine over JSON stdin / JSONL stdout (see §4.1) | Edit-only. Non-file tools are removed with `disabledToolIds`, and a permission handler approves only edits and creates under `<cwd>/demo_app`. Ask-user requests are declined. Requires Node ≥20, `npm ci && npm run build` in `engine/droid_adapter`, the `droid` CLI on PATH (the SDK spawns it), and `FACTORY_API_KEY`. A `success` result doesn't mean the change works, so we validate ourselves. |
 | `scripted` | Deterministic, offline. Applies a recipe JSON from `PARADOX_SCRIPTED_RECIPES` | Used by tests and demo rehearsals. |
 | `claude` | `claude -p --output-format json --permission-mode acceptEdits --allowedTools "Read,Edit,Write,Glob,Grep"` | Optional fallback. |
 
-### 4.1 Droid SDK adapter interface (engine ↔ Node)
-- **stdin:** one JSON object: `{"version":1,"cwd":"<abs code dir>","prompt":"<wrapped prompt>","model_id":null,"timeout_ms":300000}`.
+### 4.1 Droid SDK adapter interface (engine ↔ Node, internal)
+Codex 1 owns the implementation, in `engine/droid_adapter/src/adapter.ts`; this section documents it. It's an internal interface, so it can change without touching the HTTP API.
+- **Launch:** `node engine/droid_adapter/dist/adapter.js`, run in its own process group with a 300s deadline. Cancel sends SIGTERM, which aborts the SDK stream, and the engine kills the process group if it doesn't exit.
+- **Availability probe:** `node dist/adapter.js --probe` exits 0 if the SDK loads and a `droid` executable is found. No API key is needed for the probe; `/api/agents` also requires `FACTORY_API_KEY`.
+- **stdin:** one JSON object, `{"cwd": "<abs code dir>", "prompt": "<wrapped prompt>"}`.
 - **stdout:** JSON Lines:
-  - `{"type":"session","session_id":"…"}`
-  - `{"type":"event","event":{…}}`, which goes to the `agent` log stream
-  - exactly one final `{"type":"result","success":bool,"subtype":"success|interrupted|error_during_execution|error_structured_output","session_id":"…","duration_ms":0,"turn_count":0,"text":"…","usage":{"input_tokens":0,"output_tokens":0,"factory_credits":null}|null,"error":null|{"name":"…","message":"…"}}`
+  - zero or more `{"type":"log","message":"…"}`, which go to the `agent` log stream
+  - exactly one final `{"type":"result","exit_code":n,"session_id":"…"|null,"summary":"…"|null,"usage":{…}}`
 - **Exit codes:**
 
   | Code | Meaning |
   |---|---|
-  | 0 | Result was `success` |
-  | 1 | Agent failure (result not `success`) |
-  | 2 | Thrown SDK setup or transport error (e.g. `ProcessExitError`, `TimeoutError`, `ConnectionError`) |
-  | 3 | Aborted on SIGTERM |
+  | 0 | SDK result `success` |
+  | 1 | Run failed |
+  | 2 | Bad input |
+  | 3 | SDK or `droid` unavailable |
+  | 130 | Interrupted |
 
-- **Environment:** `PATH`, `HOME` and `FACTORY_API_KEY` only. The key is never logged.
+- **Auth:** only `FACTORY_API_KEY` from the environment, which the SDK reads itself. The adapter never prints or forwards it, and logs are sanitized.
 - **Mapping to the Generation API:**
 
-  | Generation field | Adapter source |
+  | Generation field | Source |
   |---|---|
-  | `agent.exit_code` | exit code |
-  | `agent.session_id` | `sessionId` |
-  | `agent.duration_ms` | `durationMs` |
-  | `agent.summary` | `text` |
-  | `agent.usage` | `tokenUsage.{inputTokens, outputTokens, factoryCredits}` |
+  | `agent.exit_code` | `exit_code` |
+  | `agent.session_id` | `session_id` (the SDK session id) |
+  | `agent.summary` | `summary` |
+  | `agent.usage` | `usage`, from the SDK's `tokenUsage`: `inputTokens`, `outputTokens`, `factoryCredits` |
+  | `agent.duration_ms` | Measured by the engine |
 
-  Cache and thinking token counts appear only in the logs. A non-`success` result fails with `error.stage = "agent"`.
-- **`/api/agents`:** `droid.available` requires Node ≥20, the adapter's dependencies installed, the `droid` CLI on PATH, and `FACTORY_API_KEY`. Otherwise `reason` names the first thing missing.
+  Any non-zero exit fails with `error.stage = "agent"`.
 
 ### Scripted recipe format (Codex 2 owns the recipes, Codex 1 owns the loader)
 `<PARADOX_SCRIPTED_RECIPES>/<name>.json`:

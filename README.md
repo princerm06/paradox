@@ -15,7 +15,7 @@ You describe a change in plain English ("rank the feed by popularity"). Fork spr
 POST /api/generations {parent_id, prompt}
   │
   ├─ 1. prepare   Fork copies the parent timeline's code and SQLite state into a scratch workspace
-  ├─ 2. agent     engine/agents/droid_sdk/runner.mjs (Node) → createSession({cwd, autonomyLevel: low, permissionHandler})
+  ├─ 2. agent     engine/droid_adapter (Node) → createSession({cwd, disabledToolIds, permissionHandler})
   │                └─ session.stream(prompt): Droid reads demo_app/AGENTS.md and edits the code; events stream into Fork's logs
   ├─ 3. guard     only demo_app/ may change, and existing tests can't be edited or deleted
   ├─ 4. validate  compile → the app's test suite → boot the future on a copy of the parent's data → smoke-test its HTTP API
@@ -23,12 +23,12 @@ POST /api/generations {parent_id, prompt}
 ```
 
 - **The SDK does the actual coding.** The Python engine starts the Node adapter and talks to it over a small JSON stdin / JSONL stdout
-  interface (`docs/contracts/m2-generation.md` §4.1). The adapter opens a Droid session in the future's workspace, streams it,
+  interface (`docs/contracts/m2-generation.md` §4.1; adapter internals are in `engine/droid_adapter/README.md`). The adapter opens a Droid session in the future's workspace, streams it,
   and returns the SDK's result to Fork.
 - **Every future records Droid's provenance.** That's the SDK `sessionId`, run duration, Droid's summary, token usage and
   Factory credits, the full event log, the code diff, and Fork's evaluation (`GET /api/generations/{id}`, `/logs`, `/diff`).
-- **Guardrails come from the SDK's own permission model.** `autonomyLevel: low`, plus a permission handler that only approves
-  file edits, means Droid can't run commands, install packages or push. Fork runs the tests itself and never trusts the
+- **Guardrails come from the SDK's own permission model.** Non-file tools are removed with `disabledToolIds`, and a
+  `permissionHandler` only approves file edits under `demo_app/`. So Droid can't run commands, browse, spawn agents or push. Fork runs the tests itself and never trusts the
   agent's own claim of success.
 - **Failed futures never touch the original.** If Droid's code doesn't compile, fails tests or won't boot, no timeline is created.
   The failure, logs and diff stay inspectable, and the parent timeline is unchanged.
@@ -40,7 +40,7 @@ POST /api/generations {parent_id, prompt}
 python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 curl -fsSL https://app.factory.ai/cli | sh          # Droid CLI; the SDK spawns it
 export FACTORY_API_KEY=fk-...                         # Factory settings → API keys
-(cd engine/agents/droid_sdk && npm ci --ignore-scripts)   # installs @factory/droid-sdk (Node ≥ 20)
+(cd engine/droid_adapter && npm ci --ignore-scripts && npm run build)   # @factory/droid-sdk (Node ≥ 20)
 .venv/bin/python -m engine                            # http://127.0.0.1:8000, the app at /app/
 curl -s localhost:8000/api/agents                     # "droid" should report available: true
 ```
