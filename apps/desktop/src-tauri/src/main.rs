@@ -143,14 +143,56 @@ fn selftest_script(port: u16) -> String {
     fetch("http://127.0.0.1:{port}/report?" + encodeURIComponent(JSON.stringify(state)), {{ mode: "no-cors" }}).catch(() => {{}});
     if (n < 15) setTimeout(report, 1000);
   }};
+  const ipc = async () => {{
+    const tauri = window.__TAURI_INTERNALS__;
+    const probe = async (cmd, args) => {{
+      try {{ return {{ ok: true, value: await tauri.invoke(cmd, args || {{}}) }}; }} catch (e) {{ return {{ ok: false, error: String(e) }}; }}
+    }};
+    const out = {{ ipc: !!tauri }};
+    if (tauri) {{
+      out.select_repository = await probe("select_repository");
+      out.dialog_open = await probe("plugin:dialog|open", {{ options: {{ directory: true }} }});
+      out.fs_read = await probe("plugin:fs|read_text_file", {{ path: "/etc/hosts" }});
+      out.shell_open = await probe("plugin:shell|open", {{ path: "https://example.com" }});
+    }}
+    fetch("http://127.0.0.1:{port}/ipc?" + encodeURIComponent(JSON.stringify(out)), {{ mode: "no-cors" }}).catch(() => {{}});
+  }};
+  addEventListener("load", () => setTimeout(ipc, 1500));
   addEventListener("load", () => setTimeout(report, 500));
 }})();"#
     )
 }
 
+/// Native folder picker. The page can trigger it but never supplies a path.
+/// Spike: returns only the folder name; M1 wiring will register the path with
+/// the engine (POST /api/repositories with the shell token) and return its summary.
+#[tauri::command]
+async fn select_repository(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("PARADOX_DESKTOP_SELFTEST_PICK") {
+        return picked(PathBuf::from(path));
+    }
+    use tauri_plugin_dialog::DialogExt;
+    match app.dialog().file().set_title("Open a project folder").blocking_pick_folder() {
+        None => Ok(serde_json::json!({ "cancelled": true })),
+        Some(choice) => picked(choice.into_path().map_err(|error| error.to_string())?),
+    }
+}
+
+fn picked(path: PathBuf) -> Result<serde_json::Value, String> {
+    let canonical = fs::canonicalize(&path).map_err(|_| "the selected folder is not accessible".to_string())?;
+    if !canonical.is_dir() {
+        return Err("the selection is not a folder".into());
+    }
+    let name = canonical.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok(serde_json::json!({ "cancelled": false, "name": name }))
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_localhost::Builder::new(UI_PORT).build())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![select_repository])
         .setup(|app| {
             let repo = fs::canonicalize(REPO).unwrap_or_else(|_| fail("the repository checkout was not found"));
             if !port_free(ENGINE_PORT) {

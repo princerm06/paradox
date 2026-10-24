@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "repository-picker",
+  "description": "The studio page (served from the shell's own localhost origin) may call exactly one command: the native repository picker. No dialog, fs or shell plugin permissions are granted to the page.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://localhost:5190", "http://localhost:5190/*"] },
+  "permissions": ["allow-select-repository"]
+}
