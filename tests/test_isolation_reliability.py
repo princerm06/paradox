@@ -1,4 +1,5 @@
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
 import time
@@ -81,17 +82,22 @@ def digest(directory):
     }
 
 
-def pause_adoption(client, monkeypatch):
+def pause_adoption(client, monkeypatch, expected=1):
     entered = threading.Event()
     release = threading.Event()
+    arrivals = set()
+    arrival_lock = threading.Lock()
     generations = client.app.state.generations
     original = generations.adopt
 
-    def paused(*args, **kwargs):
-        entered.set()
+    def paused(generation_id, *args, **kwargs):
+        with arrival_lock:
+            arrivals.add(generation_id)
+            if len(arrivals) == expected:
+                entered.set()
         if not release.wait(20):
             raise RuntimeError("Audit adoption barrier timed out")
-        return original(*args, **kwargs)
+        return original(generation_id, *args, **kwargs)
 
     monkeypatch.setattr(generations, "adopt", paused)
     return entered, release
@@ -292,3 +298,62 @@ def test_requested_auto_activation_preserves_outgoing_sibling_live_writes(client
     assert "Uncheckpointed sibling data" not in contents
     activate(client, sibling["id"])
     assert feed(client) == sibling_feed
+
+
+@pytest.mark.parametrize("cancel_one", [False, True])
+def test_two_ready_generations_racing_user_switch_remain_independent(client, monkeypatch, cancel_one):
+    root_id = listing(client)["active_timeline_id"]
+    publish(client, "Shared parent before concurrent jobs")
+    parent_feed = feed(client)
+    sibling = sprout(client)
+    publish(client, "User-selected sibling data")
+    sibling_feed = feed(client)
+    activate(client, root_id)
+    source = digest(ROOT / "demo_app")
+    entered, release = pause_adoption(client, monkeypatch, expected=2)
+    generation_ids = [generate(client, root_id, name=f"Concurrent future {index}") for index in range(2)]
+    try:
+        assert entered.wait(15)
+        immutable_bases = {}
+        for generation_id in generation_ids:
+            record = call(client, "GET", f"/api/generations/{generation_id}")
+            snapshot = client.app.state.engine.storage.snapshots / record["base_snapshot_id"]
+            immutable_bases[snapshot] = digest(snapshot)
+        if cancel_one:
+            cancelled = call(client, "POST", f"/api/generations/{generation_ids[0]}/cancel")
+            assert cancelled["status"] == "cancelled"
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            switch = executor.submit(activate, client, sibling["id"])
+            release.set()
+            assert switch.result(timeout=20)["id"] == sibling["id"]
+    finally:
+        release.set()
+    results = [finish(client, generation_id) for generation_id in generation_ids]
+    expected_statuses = ["cancelled", "succeeded"] if cancel_one else ["succeeded", "succeeded"]
+    assert [result["status"] for result in results] == expected_statuses, results
+    successful = [result for result in results if result["status"] == "succeeded"]
+    assert len(listing(client)["timelines"]) == 2 + len(successful)
+    assert_preview(client, sibling["id"], "chronological")
+    assert feed(client) == sibling_feed
+    for snapshot, original in immutable_bases.items():
+        assert digest(snapshot) == original
+    for result in successful:
+        activate(client, result["timeline_id"])
+        assert_preview(client, result["timeline_id"], "popular")
+        assert {post["content"] for post in feed(client)["posts"]} == {
+            post["content"] for post in parent_feed["posts"]
+        }
+        publish(client, "Only in future " + result["id"])
+    for result in successful:
+        activate(client, result["timeline_id"])
+        contents = {post["content"] for post in feed(client)["posts"]}
+        assert "Only in future " + result["id"] in contents
+        for other in successful:
+            if other["id"] != result["id"]:
+                assert "Only in future " + other["id"] not in contents
+    activate(client, root_id)
+    assert feed(client) == parent_feed
+    activate(client, sibling["id"])
+    assert feed(client) == sibling_feed
+    assert digest(ROOT / "demo_app") == source
+    assert client.app.state.engine.storage.setting("transition") is None

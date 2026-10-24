@@ -39,8 +39,10 @@ replace code, database, guard, compile, tests, boot, or smoke validation.
 | Active descendant declined after its ancestor is archived | Return to nearest non-declined ancestor without leaking private data |
 | Compile, test, or guard failure from an inactive parent | No adoption or automatic activation; active sibling and parent snapshot remain intact |
 | Explicit auto-activation from an inactive parent | Outgoing sibling's uncheckpointed live writes are saved and survive a return visit |
+| Two validated jobs race with a user-requested timeline switch | Independent adoption never overrides the selected sibling or aliases either future's database |
+| One of two validated jobs is cancelled before that race | Cancelled job publishes nothing; the other succeeds and all preexisting state survives |
 
-The 12 new cases complement existing tests for runtime crash/restart, sibling and
+The 14 new cases complement existing tests for runtime crash/restart, sibling and
 grandchild isolation, invalid snapshot ownership, snapshot restoration, lifecycle
 conflicts, same-port reuse, cancellation during activation, rollback failure, and
 generation recovery after engine termination. No existing features were rebuilt.
@@ -52,13 +54,29 @@ Use the audit worktree's own Python environment:
 ```sh
 .venv/bin/python -m pytest tests/test_engine.py tests/test_generations.py -q
 .venv/bin/python -m pytest tests/test_isolation_reliability.py -q
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q -k 'not live_droid'
 ```
 
 Before the fix, the two new database-loss cases failed with missing saved posts.
-After the fix, all 12 targeted cases pass. The original 39 core engine/generation
+After the fix, all 14 targeted cases pass. The original 39 core engine/generation
 tests passed before modifications. Final full-suite results are reported with the
 commit handoff rather than hard-coded here.
+
+## Separately owned health-gate review
+
+During the completion pass, main contained an uncommitted `engine/api.py` change
+that wraps the health endpoint in `engine.gate`, plus a corresponding gate-
+ownership test in `tests/test_engine.py`. These were inspected read-only and
+reported to Claude; they have not been copied, moved, modified, or committed
+on this audit branch. The patch is consistent with the existing timeline-list
+and application-proxy locking: health otherwise reads shared storage and runtime
+state while another thread can be transitioning them.
+
+Claude owns integration of that change. Until it lands, this branch's health
+checks verify consistency after transitions finish, not atomic health reporting
+during a transition. The new multi-job tests race actual adoption and activation
+operations, then verify settled metadata, code behavior, SQLite, and preview
+routing. No shared generation API or Droid integration files were changed.
 
 ## Remaining risks and limits
 
