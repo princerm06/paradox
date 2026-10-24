@@ -63,6 +63,28 @@ export type GenerationCheck = {
   detail?: string | null;
 };
 
+export type ChangedFile = {
+  path: string;
+  status: "added" | "modified" | "deleted" | string;
+  additions?: number | null;
+  deletions?: number | null;
+};
+
+export type GenerationAgent = {
+  exit_code?: number | null;
+  session_id?: string | null;
+  duration_ms?: number | null;
+  summary?: string | null;
+  usage?: { input_tokens?: number | null; output_tokens?: number | null; factory_credits?: number | null } | null;
+};
+
+export type GenerationEvaluation = {
+  passed?: boolean;
+  checks?: GenerationCheck[];
+  tests?: { passed?: number; failed?: number; errors?: number } | null;
+  boot_ms?: number | null;
+};
+
 export type Generation = {
   id: string;
   parent_id: string;
@@ -76,14 +98,9 @@ export type Generation = {
   created_at: string;
   updated_at: string;
   finished_at: string | null;
-  agent: Record<string, unknown> | null;
-  changes: Record<string, unknown> | null;
-  evaluation: {
-    passed?: boolean;
-    checks?: GenerationCheck[];
-    tests?: { passed?: number; failed?: number; errors?: number } | null;
-    boot_ms?: number | null;
-  } | null;
+  agent: GenerationAgent | null;
+  changes: { files?: ChangedFile[] } | null;
+  evaluation: GenerationEvaluation | null;
   error: { stage?: string; message?: string } | null;
 };
 
@@ -103,3 +120,31 @@ export type Detail =
   | Array<string | { loc?: Array<string | number>; msg?: string; message?: string }>
   | { message?: string; msg?: string }
   | null;
+
+/** Minimal OpenAPI 3 shape the studio reads from the engine's `/openapi.json`. */
+export type OpenApiDoc = {
+  openapi?: string;
+  info?: { title?: string; version?: string };
+  paths?: Record<string, Record<string, OpenApiOperation | undefined>>;
+  components?: { schemas?: Record<string, OpenApiSchema> };
+};
+
+export type OpenApiOperation = {
+  summary?: string;
+  operationId?: string;
+  parameters?: Array<{ name: string; in: string; required?: boolean; schema?: OpenApiSchema }>;
+  requestBody?: { required?: boolean; content?: Record<string, { schema?: OpenApiSchema }> };
+  responses?: Record<string, { description?: string; content?: Record<string, { schema?: OpenApiSchema }> }>;
+};
+
+export type OpenApiSchema = {
+  $ref?: string;
+  type?: string;
+  title?: string;
+  properties?: Record<string, OpenApiSchema>;
+  required?: string[];
+  items?: OpenApiSchema;
+  enum?: unknown[];
+  anyOf?: OpenApiSchema[];
+  default?: unknown;
+};

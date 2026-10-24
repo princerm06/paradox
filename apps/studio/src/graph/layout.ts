@@ -1,11 +1,12 @@
 import { Position, type Edge, type Node } from "@xyflow/react";
 import type { Generation, Timeline } from "../api/types.ts";
-import { generationStageLabel, isTerminalGeneration, statusLabel } from "../lib/format.ts";
+import { generationStageLabel, modificationLabel, statusLabel } from "../lib/format.ts";
+import { isActiveGeneration } from "../lib/generation.ts";
 
-export const NODE_W = 220;
-export const NODE_H = 64;
-const GAP_X = 52;
-const GAP_Y = 64;
+export const NODE_W = 260;
+export const NODE_H = 108;
+const GAP_X = 104;
+const GAP_Y = 28;
 
 export function generationNodeId(id: string): string {
   return `generation:${id}`;
@@ -14,8 +15,12 @@ export function generationNodeId(id: string): string {
 export type TimelineNodeData = {
   name: string;
   statusText: string;
+  parentName: string | null;
+  createdAt: string;
+  modificationText: string | null;
   isActive: boolean;
   isPending: boolean;
+  isConfirmed: boolean;
   isDeclined: boolean;
   isRoot: boolean;
   hasChildren: boolean;
@@ -25,9 +30,13 @@ export type GhostNodeData = {
   generationId: string;
   name: string;
   statusText: string;
+  parentName: string | null;
+  createdAt: string;
+  provider: string;
   isRunning: boolean;
   isFailed: boolean;
   isCancelled: boolean;
+  isSucceeded: boolean;
 };
 
 export type TimelineFlowNode = Node<TimelineNodeData, "timeline">;
@@ -100,14 +109,14 @@ function layoutPositions(items: GraphItem[]): Map<string, { x: number; y: number
   for (const root of childrenOf(items, null)) cursor += place(root.id, 0, cursor, items, placed, seen);
   const positions = new Map<string, { x: number; y: number }>();
   for (const [id, spot] of placed) {
-    positions.set(id, { x: spot.column * (NODE_W + GAP_X), y: spot.depth * (NODE_H + GAP_Y) });
+    positions.set(id, { x: spot.depth * (NODE_W + GAP_X), y: spot.column * (NODE_H + GAP_Y) });
   }
   return positions;
 }
 
 export function timelineGraphSignature(timelines: Timeline[], generations: Generation[] = []): string {
   const timelinesKey = timelines
-    .map((timeline) => [timeline.id, timeline.parent_id ?? "", timeline.name, timeline.status, timeline.is_active ? "1" : "0", timeline.created_at].join("\t"))
+    .map((timeline) => [timeline.id, timeline.parent_id ?? "", timeline.name, timeline.status, timeline.is_active ? "1" : "0", timeline.created_at, timeline.modification ?? ""].join("\t"))
     .sort()
     .join("\n");
   const generationsKey = generations
@@ -121,6 +130,7 @@ export function buildTimelineGraph(timelines: Timeline[], generations: Generatio
   const items = graphItems(timelines, generations);
   const positions = layoutPositions(items);
   const childIds = new Set(items.filter((item) => item.parentId).map((item) => item.parentId));
+  const nameById = new Map(timelines.map((timeline) => [timeline.id, timeline.name]));
   const nodes: StudioNode[] = [];
   const edges: Edge[] = [];
   for (const timeline of timelines) {
@@ -135,13 +145,17 @@ export function buildTimelineGraph(timelines: Timeline[], generations: Generatio
       style: { pointerEvents: "all" },
       draggable: false,
       connectable: false,
-      sourcePosition: Position.Bottom,
-      targetPosition: Position.Top,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
       data: {
         name: timeline.name,
         statusText: statusText(timeline),
+        parentName: timeline.parent_id ? nameById.get(timeline.parent_id) ?? null : null,
+        createdAt: timeline.created_at,
+        modificationText: timeline.modification ? modificationLabel(timeline.modification) : null,
         isActive: timeline.is_active,
         isPending: timeline.status === "pending",
+        isConfirmed: timeline.status === "confirmed",
         isDeclined: timeline.status === "declined",
         isRoot: !timeline.parent_id,
         hasChildren: childIds.has(timeline.id),
@@ -152,7 +166,8 @@ export function buildTimelineGraph(timelines: Timeline[], generations: Generatio
         id: `edge:${timeline.parent_id}:${timeline.id}`,
         source: timeline.parent_id,
         target: timeline.id,
-        type: "smoothstep",
+        type: "branch",
+        data: { running: false },
       });
     }
   }
@@ -160,7 +175,7 @@ export function buildTimelineGraph(timelines: Timeline[], generations: Generatio
     const id = generationNodeId(generation.id);
     const position = positions.get(id);
     if (!position) continue;
-    const running = !isTerminalGeneration(generation.status);
+    const running = isActiveGeneration(generation.status);
     nodes.push({
       id,
       type: "ghost",
@@ -170,23 +185,27 @@ export function buildTimelineGraph(timelines: Timeline[], generations: Generatio
       style: { pointerEvents: "all" },
       draggable: false,
       connectable: false,
-      sourcePosition: Position.Bottom,
-      targetPosition: Position.Top,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
       data: {
         generationId: generation.id,
         name: generation.name,
         statusText: generationStageLabel(generation),
+        parentName: nameById.get(generation.parent_id) ?? null,
+        createdAt: generation.created_at,
+        provider: generation.provider,
         isRunning: running,
         isFailed: generation.status === "failed",
         isCancelled: generation.status === "cancelled",
+        isSucceeded: generation.status === "succeeded",
       },
     });
     edges.push({
       id: `edge:${generation.parent_id}:${id}`,
       source: generation.parent_id,
       target: id,
-      type: "smoothstep",
-      style: { stroke: "#6d628f", strokeDasharray: "4 4" },
+      type: "branch",
+      data: { running, ghost: true },
     });
   }
   return { nodes, edges };

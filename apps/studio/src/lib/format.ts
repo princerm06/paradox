@@ -14,7 +14,7 @@ export function generationStageLabel(generation: Generation): string {
   if (generation.status === "generating") return "Generating";
   if (generation.status === "validating") return "Validating";
   if (generation.status === "succeeded") return "Succeeded";
-  return generation.status || "Unknown";
+  return generation.status ? `Unknown · ${generation.status}` : "Unknown";
 }
 
 export function modificationLabel(value: Modification | undefined): string {
