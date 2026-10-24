@@ -1,6 +1,8 @@
 import difflib
+import io
 from pathlib import Path
 import time
+import tokenize
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -8,6 +10,29 @@ import httpx
 from engine.jobs import log_line, scrubbed_environment
 from engine.runtime import Runtime
 from engine.storage import copy_tree
+
+
+TEST_BOOTSTRAP = """
+import importlib.util
+from pathlib import Path
+import sys
+import pytest
+
+fixture = Path(sys.argv[1])
+plugins = []
+if fixture.is_file():
+    spec = importlib.util.spec_from_file_location('paradox_baseline_fixtures', fixture)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    plugins.append(module)
+raise SystemExit(pytest.main(sys.argv[2:], plugins=plugins))
+"""
+
+
+def reject_bytecode(root):
+    for path in root.rglob("*"):
+        if path.name.lower() == "__pycache__" or path.suffix.lower() == ".pyc":
+            raise ValueError("Agent-supplied bytecode/cache artifacts are not allowed: " + path.relative_to(root).as_posix())
 
 
 def files(root):
@@ -48,6 +73,16 @@ def guard(base, current, changed):
     if len(paths) > 50:
         raise ValueError("At most 50 changed files are allowed")
     for path in paths:
+        name = Path(path).name.lower()
+        if name in {"conftest.py", "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", "sitecustomize.py", "usercustomize.py"} or name.endswith(".pth"):
+            raise ValueError("Validation configuration/hooks are protected: " + path)
+        if path.endswith(".py") and path in current:
+            try:
+                tokens = tokenize.tokenize(io.BytesIO(current[path]).readline)
+                if any(token.type == tokenize.NAME and token.string == "pytest_plugins" for token in tokens):
+                    raise ValueError("pytest_plugins declarations are not allowed: " + path)
+            except (tokenize.TokenError, IndentationError, SyntaxError):
+                pass
         if not path.startswith("demo_app/"):
             raise ValueError("Changes outside demo_app/ are not allowed")
         if path == "demo_app/AGENTS.md":
