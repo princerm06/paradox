@@ -140,17 +140,19 @@ It does not inherit an arbitrary CLI model default. Before `session.stream`, it
 uses SDK `listModels({cwd, includeDisabled: true})` to reject unavailable or
 organization-disabled models, verifies the initialized model ID matches the
 requested ID, checks `session.settings.toolExecutionMode === 'direct_only'`,
-and requires `session.listTools` to report **Read, Edit, and Create each with
-`allowed === true`**. Missing or unknown mode metadata fails closed. Script-only sessions
+and requires `session.listTools` to report **Read with `allowed === true`,
+plus registered Edit and Create entries**. Edit/Create may report either
+`allowed: true` or `allowed: false` (approval required under Off). Missing or
+unknown mode metadata fails closed. Script-only sessions
 fail with a clear configuration error before streaming: allowing Script would
 bypass the adapter's file-only permission policy. `AutonomyLevel.Off` remains
 enabled; direct edit/create permission requests still receive `proceed_once`
-only for valid paths. Catalog presence alone is insufficient; ApplyPatch is
-not a substitute for the three required tools. The offline CLI read-only
-catalog marks Create/Edit blocked: if the initialized SDK session does too,
-the adapter deliberately refuses to stream. This strict preflight may reject
-otherwise approval-gated configurations; it does not raise autonomy or query
-tools with hypothetical weaker settings. See `VERIFICATION.md` for evidence.
+only for valid paths. ApplyPatch is not a substitute for missing Edit/Create.
+Disabled tools can remain in the catalog with `allowed: false`, so a static
+regression ensures Edit/Create are never in `DISABLED_TOOL_IDS`; the scoped
+permission handler remains the write boundary. Logs record both `allowed`
+and `defaultAllowed` for all three tools. No autonomy increase or hypothetical
+weaker-settings probe is used. See `VERIFICATION.md` for offline evidence.
 Model/tool discovery uses metadata RPCs, not model turns; `/api/agents` does
 not make those authenticated calls and remains an offline prerequisite probe.
 

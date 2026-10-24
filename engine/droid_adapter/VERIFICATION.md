@@ -20,7 +20,8 @@ The production call chain is:
    `PARADOX_DROID_MODEL`), checks the session's `toolExecutionMode`, and calls
    **`session.listTools`** before streaming. SDK **`listModels`** first checks
    availability and organization restrictions; the initialized model must match
-   the requested ID. Read, Edit, and Create must each report `allowed === true`.
+   the requested ID. Read must report `allowed === true`; Edit and Create must
+   be registered (either allowed flag value is accepted for approval under Off).
    Script-only/unknown-mode/disallowed-file-tool
    sessions fail closed rather than paying for a tool-less model response.
 4. It iterates **`session.stream(prompt, {abortSignal})`**. SDK messages become
@@ -226,12 +227,13 @@ catalog metadata, and rejects script-only/unknown modes or missing read/write
 tools **before `session.stream`**. It never enables Script or shell execution
 and never silently switches models after a failure.
 
-`AutonomyLevel.Off` is retained. The mandatory preflight requires Read, Edit,
-and Create each with `allowed === true`, not just catalog presence. An
-ApplyPatch-only catalog is insufficient. Even if `allowed: false` indicates
-an approval-gated tool rather than an absent one, this adapter fails closed;
-it never probes hypothetical weaker autonomy settings. A mocked SDK regression
-performs a temporary-file write only after the existing handler approves it.
+`AutonomyLevel.Off` is retained. The user-approved Option 1 supersedes the
+strict allowed-true write gate in `fc9d78b`: Read must have `allowed === true`,
+but Edit and Create need only be registered. Either allowed value is accepted
+for those writes because Off can require permission approval. An ApplyPatch-only
+catalog is insufficient. No weaker autonomy settings are probed. The existing
+permission handler still approves only scoped demo_app writes; a mocked SDK
+regression performs a temporary-file write only after that handler approves it.
 
 Offline local CLI catalog checks used `droid exec --list-tools --model ...`
 under macOS `sandbox-exec` with **all network denied**. Sonnet's catalog includes
@@ -239,11 +241,40 @@ Read/Create/Edit; GPT's includes Read/ApplyPatch. This is catalog inspection,
 not a model turn or authenticated end-to-end proof. The saved `script_only`
 setting explains why catalog entries alone were insufficient in the failed
 session; the new preflight checks both effective mode and allowed flags.
-**Limitation:** the local read-only Sonnet catalog marks Create/Edit blocked.
-If SDK session metadata agrees, the strict preflight will reject this default
-configuration without a model turn. The catalog proves the model has direct
-file-tool schemas, not that this account/session is permitted to use them.
+The local read-only Sonnet catalog marks Create/Edit blocked, which Option 1
+now accepts as registered tools needing approval. The catalog proves the model
+has direct file-tool schemas, not successful account/session write execution.
 No authenticated model discovery or new live turn was run during this fix.
+
+### Disabled tools remain registered in the catalog
+
+**Disabled tools can be listed with `currentlyAllowed: false`, not omitted.**
+With CLI 0.249.0, the network-denied command below removed Read, Edit, Create,
+and Execute but returned all four entries. Read and Execute had
+`defaultAllowed: true, currentlyAllowed: false`; Edit and Create had
+`defaultAllowed: false, currentlyAllowed: false`. Thus a blocked flag cannot
+distinguish an approval-gated write from a removed/disabled tool. The SDK's
+`ExecToolInfoSchema` (`index-DWBA4zgW.d.ts:50256`) exposes only `defaultAllowed`
+and `currentlyAllowed`, not a separate disabled/needs-approval indicator.
+`node.mjs:4055` preserves `defaultAllowed` and maps `currentlyAllowed` to
+`allowed`. The SDK forwards its `disabledToolIds` on initialization at
+`node.mjs:3673`; the CLI removal probe illustrates the catalog ambiguity, not
+a claim that we tested an authenticated SDK initialization.
+
+```sh
+env -u FACTORY_API_KEY /usr/bin/sandbox-exec \
+  -p '(version 1) (allow default) (deny network*)' \
+  "$HOME/.local/bin/droid" exec --list-tools --model claude-sonnet-4-6 \
+  --output-format json --remove-tools Read,Edit,Create,Execute
+```
+
+Evidence is saved locally in `.venv/sonnet-removed-tools.json` (not committed).
+This command exits after catalog discovery, has no feature prompt, denies all
+network, and starts no paid generation. Protection against accidentally
+disabling required writes therefore rests on the static not-in-
+`DISABLED_TOOL_IDS` regression for Edit/Create, alongside the unchanged runtime
+permission handler and restricted tools. Read still must be allowed. The
+adapter logs `allowed` and `defaultAllowed` for each required tool (or missing).
 
 ### Exact installed SDK metadata implementation (0.10.0)
 
@@ -273,7 +304,7 @@ the initialized session's effective model/mode/tools before streaming.
 Regression coverage reproduces the exact script-only configuration, asserts
 `stream` is never called for it or an empty catalog, checks explicit model
 selection/override, absent/organization-disabled models, unknown modes,
-disallowed Read/Edit/Create, model substitution, metadata failures, preflight
+disallowed Read, missing Read/Edit/Create, model substitution, metadata failures, preflight
 ordering, closure and null preflight usage. Mocked direct writes work with Off
 while Script/WaitForScript/Execute remain disabled. A Python regression confirms
 unchanged source still fails the real-change guard after SDK success.
@@ -285,10 +316,26 @@ npm --prefix engine/droid_adapter test
 env -u FACTORY_API_KEY .venv/bin/python -m pytest tests/test_droid_provider.py tests/test_generations.py -q
 ```
 
-Results for this review hardening: **34 Node tests passed** (TypeScript build
+Results for the earlier strict-gate review: **34 Node tests passed** (TypeScript build
 included), **46 Python tests passed in 35.57 seconds**, and `git diff --check`
 passed. All SDK session/model/tool interactions in these tests are mocked;
 the Python real-runtime traversal checks use local fixtures, not paid Droid.
+
+Option 1 final offline validation (Factory key unset for both Python commands):
+
+- `npm --prefix engine/droid_adapter test`: **39 passed**, TypeScript build included.
+- `env -u FACTORY_API_KEY .venv/bin/python -m pytest tests/test_droid_provider.py tests/test_generations.py -q`:
+  **46 passed in 35.19 seconds**.
+- `env -u FACTORY_API_KEY .venv/bin/python -m pytest -q`:
+  **134 passed, 1 skipped in 204.59 seconds**; the live Droid test was skipped.
+- `git diff --check`: passed.
+
+The new regressions cover allowed and approval-needed writes, missing write
+tools, missing/disallowed Read, static write-tool exclusion from the disabled
+list, both catalog flags in logs, and the exact production `demo_app` write-root
+path/escape matrix. The mocked SDK direct-file edit now exercises registered
+writes with `allowed: false` and still requires permission-handler approval.
+No paid/live generation, push, merge, or Studio modification occurred.
 
 A second user-approved run is necessary to claim a successful real Factory
 generation after the fix, not to diagnose this failure or review the offline

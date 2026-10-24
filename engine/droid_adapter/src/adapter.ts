@@ -396,10 +396,13 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
     } catch (error) {
       throw new Error(`Cannot verify direct file tools for Droid model "${modelId}" (mode ${mode}): ${errorText(error)}`);
     }
-    log(`file tool catalog: ${tools.map((tool) => `${tool.id} (allowed=${tool.allowed})`).join(', ')}`);
-    const unavailableTools = ['Read', 'Edit', 'Create'].filter((id) => !tools.some((tool) => tool.id === id && tool.allowed === true));
+    log(`file tool catalog: ${['Read', 'Edit', 'Create'].map((id) => {
+      const tool = tools.find((entry) => entry.id === id);
+      return tool ? `${id} (allowed=${tool.allowed}, defaultAllowed=${tool.defaultAllowed})` : `${id} (missing)`;
+    }).join(', ')}`);
+    const unavailableTools = ['Read', 'Edit', 'Create'].filter((id) => !tools.some((tool) => tool.id === id && (id !== 'Read' || tool.allowed === true)));
     if (unavailableTools.length) {
-      throw new Error(`Droid model "${modelId}" (mode ${mode}) does not allow required file tools: ${unavailableTools.join(', ')}. Check model/organization tool permissions; AutonomyLevel.Off and shell restrictions remain unchanged.`);
+      throw new Error(`Droid model "${modelId}" (mode ${mode}) lacks required file tools: ${unavailableTools.join(', ')}. Read must be allowed; Edit and Create must be registered for approval. Check model/organization tool permissions; AutonomyLevel.Off and shell restrictions remain unchanged.`);
     }
 
     for await (const message of session.stream(input.prompt, { abortSignal: deps.abortSignal })) {
