@@ -3,11 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "description": "Tauri 2 desktop shell proof of concept for the Paradox studio (scripted engine only).",
+  "type": "module",
   "scripts": {
     "dist:placeholder": "rm -rf dist && mkdir -p dist && cp placeholder/index.html dist/index.html",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dist:studio": "cd ../studio && VITE_PARADOX_API_BASE=http://127.0.0.1:8100 VITE_PARADOX_SAFE_PROVIDER=1 npm run build -- --outDir ../desktop/dist --emptyOutDir",
+    "test:desktop": "playwright test -c tests/playwright.config.ts"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.4"
+    "@tauri-apps/cli": "2.12.4",
+    "@playwright/test": "1.64.1"
   }
 }

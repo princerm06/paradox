@@ -115,6 +115,39 @@ fn stop_engine(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Read-only DOM report from inside the app window, for debug-build self-tests.
+#[cfg(debug_assertions)]
+fn selftest_script(port: u16) -> String {
+    format!(
+        r#"(() => {{
+  const errors = [];
+  addEventListener("error", (e) => errors.push(String(e.message)));
+  addEventListener("unhandledrejection", (e) => errors.push(String(e.reason)));
+  let n = 0;
+  const report = () => {{
+    const q = (s) => document.querySelector(s);
+    const live = [...document.querySelectorAll(".topbar span, header span")].map((e) => e.textContent).find((t) => t && t.startsWith("Live ·")) || null;
+    const state = {{
+      n: ++n,
+      origin: location.origin,
+      engine: document.documentElement.getAttribute("data-paradox-engine"),
+      tokenSet: (localStorage.getItem("paradox.token:http://127.0.0.1:{ENGINE_PORT}") || "").length,
+      live,
+      provider: (q("select[aria-label='Agent provider']") || {{}}).value || null,
+      nodes: document.querySelectorAll(".future-node").length,
+      engineDot: (q("[role=img][aria-label^='Engine']") || {{}}).getAttribute?.("aria-label") || null,
+      portal: !!q("iframe[title='Live application']"),
+      webkit: navigator.userAgent,
+      errors,
+    }};
+    fetch("http://127.0.0.1:{port}/report?" + encodeURIComponent(JSON.stringify(state)), {{ mode: "no-cors" }}).catch(() => {{}});
+    if (n < 15) setTimeout(report, 1000);
+  }};
+  addEventListener("load", () => setTimeout(report, 500));
+}})();"#
+    )
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_localhost::Builder::new(UI_PORT).build())
@@ -146,12 +179,18 @@ fn main() {
                 "try {{ localStorage.removeItem('paradox.apiBase'); localStorage.setItem('paradox.token:{base}', '{token}'); }} catch (e) {{}}"
             );
             let url = format!("http://localhost:{UI_PORT}").parse().expect("static url");
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+            let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("Paradox (desktop POC · scripted)")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1024.0, 700.0)
-                .initialization_script(&init)
-                .build()?;
+                .initialization_script(&init);
+            // Debug builds only: let a local test listener see what the real WKWebView rendered.
+            #[cfg(debug_assertions)]
+            let builder = match std::env::var("PARADOX_DESKTOP_SELFTEST_PORT").ok().and_then(|p| p.parse::<u16>().ok()) {
+                Some(port) => builder.initialization_script(&selftest_script(port)),
+                None => builder,
+            };
+            builder.build()?;
             Ok(())
         })
         .build(tauri::generate_context!())
