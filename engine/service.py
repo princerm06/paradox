@@ -73,7 +73,9 @@ class Engine:
                     self.storage.set_setting("active_id", timeline_id)
             else:
                 recovery = self.storage.setting("transition")
-                if recovery or not (self.storage.workspace / "code" / "demo_app" / "main.py").exists():
+                database = self.storage.workspace / "state" / "app.sqlite3"
+                missing_database = not database.is_file() or database.stat().st_size == 0
+                if recovery or missing_database or not (self.storage.workspace / "code" / "demo_app" / "main.py").is_file():
                     marker = json.loads(recovery) if recovery else {}
                     snapshot_id = marker.get("snapshot_id") or self.storage.timeline(self.active_id)["snapshot_id"]
                     self.storage.restore(snapshot_id)
