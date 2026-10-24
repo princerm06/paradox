@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 import pytest
 
 from engine.api import create_app
+from engine.jobs import JobControl
+from engine import validation
 from engine.validation import changes, guard, reject_bytecode
 
 
@@ -122,3 +124,145 @@ def test_legitimate_scripted_popular_feed_keeps_all_baseline_fixtures(client):
     assert client.get("/api/timelines").json()["active_timeline_id"] == root
     assert client.post("/api/timelines/" + result["timeline_id"] + "/activate").status_code == 200
     assert client.get("/app/api/posts").json()["ordering"] == "popular"
+
+
+def start_popular(client):
+    root = client.get("/api/timelines").json()["active_timeline_id"]
+    response = client.post("/api/generations", json={"parent_id": root, "prompt": "popular", "provider": "scripted"})
+    assert response.status_code == 202, response.text
+    return response.json()["id"]
+
+
+def require_failed_generation(client, result, stage):
+    assert result["status"] == "failed", result
+    assert result["error"]["stage"] == stage, result
+    assert result["timeline_id"] is None
+    listing = client.get("/api/timelines").json()
+    assert len(listing["timelines"]) == 1
+    assert listing["timelines"][0]["id"] == listing["active_timeline_id"]
+    assert client.get("/app/api/posts").json()["ordering"] == "chronological"
+
+
+def test_exit_zero_without_junit_cannot_hide_a_failing_test(client, monkeypatch):
+    manager = client.app.state.generations
+    original = manager.providers.run
+
+    def attack(provider, prompt, code, control, log):
+        result = original(provider, prompt, code, control, log)
+        (code / "demo_app/tests/test_000_exit.py").write_text("import os\nos._exit(0)\n")
+        (code / "demo_app/tests/test_failure.py").write_text("def test_failure():\n    assert False\n")
+        return result
+
+    monkeypatch.setattr(manager.providers, "run", attack)
+    generation_id = start_popular(client)
+    result = wait(client, generation_id)
+    require_failed_generation(client, result, "tests")
+    assert "Test report missing" in result["error"]["message"]
+    assert not list((manager.root / generation_id).glob("tests-*.xml"))
+
+
+def test_skip_and_removal_attempt_cannot_remove_immutable_tests(client, monkeypatch):
+    manager = client.app.state.generations
+    original = manager.providers.run
+
+    def attack(provider, prompt, code, control, log):
+        result = original(provider, prompt, code, control, log)
+        (code / "demo_app/tests/test_skip.py").write_text("import pytest\npytest.skip('skip', allow_module_level=True)\n")
+        (code / "demo_app/tests/test_feed_contract.py").unlink()
+        return result
+
+    monkeypatch.setattr(manager.providers, "run", attack)
+    require_failed_generation(client, wait(client, start_popular(client)), "guard")
+
+
+def test_collection_tampering_cannot_lower_the_immutable_baseline_floor(client, monkeypatch):
+    manager = client.app.state.generations
+    original = manager.providers.run
+
+    def attack(provider, prompt, code, control, log):
+        result = original(provider, prompt, code, control, log)
+        (code / "demo_app/tests/test_000_skip.py").write_text(
+            "import pytest\n"
+            "original_collect = pytest.Module.collect\n"
+            "def filtered_collect(self):\n"
+            "    if self.path.name in {'test_feed_contract.py', 'test_persistence_contract.py', 'test_ranking_contract.py'}:\n"
+            "        return []\n"
+            "    return original_collect(self)\n"
+            "pytest.Module.collect = filtered_collect\n"
+            "pytest.skip('hide baseline collection', allow_module_level=True)\n"
+        )
+        return result
+
+    monkeypatch.setattr(manager.providers, "run", attack)
+    result = wait(client, start_popular(client))
+    require_failed_generation(client, result, "tests")
+    assert result["evaluation"]["tests"] == {"passed": 1, "failed": 0, "errors": 0}
+    assert "1 executed, expected at least 18" in result["error"]["message"]
+
+
+def junit(passed=0, failed=0, errors=0, skipped=0):
+    cases = "<testcase/>" * passed
+    cases += "<testcase><failure/></testcase>" * failed
+    cases += "<testcase><error/></testcase>" * errors
+    cases += "<testcase><skipped/></testcase>" * skipped
+    total = passed + failed + errors + skipped
+    return f'<testsuite tests="{total}" failures="{failed}" errors="{errors}" skipped="{skipped}">{cases}</testsuite>'
+
+
+@pytest.mark.parametrize("vector", ["malformed", "symlink", "failed", "errors"])
+def test_exit_zero_with_bad_report_cannot_pass_generation(client, monkeypatch, vector):
+    original = JobControl.run
+
+    def tamper(self, command, *args, **kwargs):
+        result = original(self, command, *args, **kwargs)
+        if "--junitxml" not in command:
+            return result
+        report = Path(command[command.index("--junitxml") + 1])
+        assert report.name.startswith("tests-") and len(report.stem) == 38
+        if vector == "malformed":
+            report.write_text("<testsuite")
+        elif vector == "symlink":
+            target = report.with_suffix(".target")
+            report.rename(target)
+            report.symlink_to(target)
+        else:
+            report.write_text(junit(passed=18, failed=int(vector == "failed"), errors=int(vector == "errors")))
+        return 0
+
+    monkeypatch.setattr(JobControl, "run", tamper)
+    require_failed_generation(client, wait(client, start_popular(client)), "tests")
+
+
+@pytest.mark.parametrize("kind", ["missing", "symlink", "directory", "malformed", "wrong_root", "inconsistent"])
+def test_report_parser_requires_regular_well_formed_consistent_junit(tmp_path, kind):
+    report = tmp_path / "report.xml"
+    if kind == "symlink":
+        target = tmp_path / "target.xml"
+        target.write_text(junit(passed=18))
+        report.symlink_to(target)
+    elif kind == "directory":
+        report.mkdir()
+    elif kind == "malformed":
+        report.write_text("<testsuite")
+    elif kind == "wrong_root":
+        report.write_text("<anything/>")
+    elif kind == "inconsistent":
+        report.write_text('<testsuite tests="18" failures="0" errors="0" skipped="0"/>')
+    with pytest.raises(ValueError, match="Test report"):
+        validation.test_counts(report)
+
+
+def test_skipped_tests_do_not_count_towards_execution_floor(tmp_path):
+    report = tmp_path / "report.xml"
+    report.write_text(junit(passed=1, skipped=20))
+    counts = validation.test_counts(report)
+    assert counts == {"passed": 1, "failed": 0, "errors": 0}
+    with pytest.raises(ValueError, match="1 executed, expected at least 18"):
+        validation.require_test_success(0, counts, 18)
+
+
+def test_nonzero_pytest_exit_is_rejected_even_with_a_success_report(tmp_path):
+    report = tmp_path / "report.xml"
+    report.write_text(junit(passed=18))
+    with pytest.raises(ValueError, match="tests failed"):
+        validation.require_test_success(1, validation.test_counts(report), 18)

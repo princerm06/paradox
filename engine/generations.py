@@ -14,7 +14,7 @@ from engine.jobs import Cancelled, JobControl, log_line, redact, scrubbed_enviro
 from engine.providers import Providers
 from engine.service import Conflict, Unavailable
 from engine.storage import copy_tree, now
-from engine.validation import TEST_BOOTSTRAP, changes, files, guard, reject_bytecode, test_counts, validate_runtime
+from engine.validation import TEST_BOOTSTRAP, baseline_test_count, changes, files, guard, reject_bytecode, require_test_success, test_counts, validate_runtime
 
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
@@ -187,14 +187,14 @@ class Generations:
             passed("compile", started)
             stage = "tests"
             started = time.monotonic()
-            report = directory / "tests.xml"
+            expected_tests = baseline_test_count(directory, base, control, validation_log)
+            report = directory / f"tests-{uuid4().hex}.xml"
             test_environment = scrubbed_environment()
             test_environment["PARADOX_APP_DIR"] = str(directory / "test-state")
-            result = control.run([sys.executable, "-c", TEST_BOOTSTRAP, str(base / "code/demo_app/tests/conftest.py"), "-q", "--noconftest", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(code), "demo_app/tests", "--junitxml", str(report)], code, validation_log, 120, environment=test_environment)
+            result = control.run([sys.executable, "-c", TEST_BOOTSTRAP, str(base / "code/demo_app/tests/conftest.py"), "-", "-q", "--noconftest", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(code), "demo_app/tests", "--junitxml", str(report)], code, validation_log, 120, environment=test_environment)
             evaluation["tests"] = test_counts(report)
             self.update(generation_id, evaluation=evaluation)
-            if result:
-                raise RuntimeError("Generated application tests failed; inspect validation logs")
+            require_test_success(result, evaluation["tests"], expected_tests)
             passed("tests", started, f"{evaluation['tests']['passed']} passed")
             stage = "boot"
             started = time.monotonic()
