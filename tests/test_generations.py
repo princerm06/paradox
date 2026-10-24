@@ -232,6 +232,22 @@ def test_bearer_auth_is_mutation_only_and_cors_errors_are_readable(configured, m
         assert connection.post("/app/api/posts", json={"content": "iframe traffic"}).status_code == 201
 
 
+@pytest.mark.parametrize("origin", ["https://evil.example", "null", "http://localhost:5174"])
+def test_foreign_origin_cannot_mutate_without_token(configured, monkeypatch, origin):
+    monkeypatch.delenv("PARADOX_TOKEN", raising=False)
+    monkeypatch.setenv("PARADOX_CORS_ORIGINS", "http://localhost:5173")
+    with TestClient(create_app(**configured)) as connection:
+        root = connection.get("/api/timelines").json()["active_timeline_id"]
+        before = connection.get(f"/api/timelines/{root}/snapshots").json()["snapshots"]
+        denied = connection.post(f"/api/timelines/{root}/snapshots", headers={"origin": origin})
+        assert denied.status_code == 403
+        assert "access-control-allow-origin" not in denied.headers
+        assert connection.get(f"/api/timelines/{root}/snapshots").json()["snapshots"] == before
+        assert connection.post(f"/api/timelines/{root}/snapshots", headers={"origin": "http://localhost:5173"}).status_code == 201
+        assert connection.post(f"/api/timelines/{root}/snapshots").status_code == 201
+        assert connection.get("/api/timelines", headers={"origin": origin}).status_code == 200
+
+
 @pytest.mark.parametrize("origins", ["*", "https://*.example.com", "https://fork.test/path"])
 def test_cors_requires_exact_origins(monkeypatch, origins):
     monkeypatch.setenv("PARADOX_CORS_ORIGINS", origins)
