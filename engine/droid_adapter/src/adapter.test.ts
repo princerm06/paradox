@@ -20,6 +20,7 @@ import {
   probe,
   runAdapter,
   sanitize,
+  verifyWriteSandbox,
 } from './adapter.js';
 
 const workspace = mkdtempSync(path.join(tmpdir(), 'droid-adapter-test-'));
@@ -149,7 +150,7 @@ type FakeSession = Awaited<ReturnType<RunnerDeps['createSession']>>;
 function harness(streamMessages: Array<Record<string, unknown>>, options: { throwOnCreate?: Error } = {}) {
   const emitted: AdapterMessage[] = [];
   const diagnostics: string[] = [];
-  const captured: { options?: Parameters<RunnerDeps['createSession']>[0]; closed: boolean } = { closed: false };
+  const captured: { options?: Parameters<RunnerDeps['createSession']>[0]; update?: unknown; closed: boolean } = { closed: false };
   const deps: RunnerDeps = {
     autonomyOff: 'off' as RunnerDeps['autonomyOff'],
     env: { FACTORY_API_KEY: 'fk-test-key-0000000000' },
@@ -161,13 +162,14 @@ function harness(streamMessages: Array<Record<string, unknown>>, options: { thro
       if (options.throwOnCreate) throw options.throwOnCreate;
       const session = {
         id: 'sess-1',
-        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+        settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
         async listTools() {
           return [{ id: 'Read', allowed: true }, { id: 'Create', allowed: true }, { id: 'Edit', allowed: true }];
         },
         async *stream() {
           for (const message of streamMessages) yield message;
         },
+        async updateSettings(options: Parameters<FakeSession['updateSettings']>[0]) { captured.update = options; },
         async close() {
           captured.closed = true;
         },
@@ -200,6 +202,7 @@ describe('runAdapter', () => {
       assert.ok(opts.disabledToolIds?.includes(id), id);
     }
     assert.deepEqual(opts.disabledToolIds, [...DISABLED_TOOL_IDS]);
+    assert.deepEqual(h.captured.update, { enabledToolIds: ['Read', 'Edit', 'Create'], disabledToolIds: [...DISABLED_TOOL_IDS] });
     const handler = opts.permissionHandler!;
     assert.equal(await handler({ toolUses: [{ details: { type: 'exec', command: 'rm -rf /' } }], options: OFFERED } as never), 'cancel');
     assert.equal(
@@ -285,12 +288,13 @@ describe('runAdapter', () => {
     h.deps.abortSignal = controller.signal;
     h.deps.createSession = async () => ({
       id: 'cancelled-session',
-      settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+      settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
       async listTools() { return [{ id: 'Read', allowed: true }, { id: 'Edit', allowed: true }, { id: 'Create', allowed: true }]; },
       async *stream() {
         controller.abort();
         throw new Error('operation aborted');
       },
+      async updateSettings() {},
       async close() { h.captured.closed = true; },
     } as unknown as FakeSession);
     assert.equal(await runAdapter(input, h.deps), EXIT_INTERRUPTED);
@@ -317,9 +321,10 @@ describe('runAdapter', () => {
       h.captured.options = options;
       return {
         id: 'script-only-session',
-        settings: { modelId: 'gpt-6.1-sol', toolExecutionMode: 'script_only' },
+        settings: { autonomyLevel: 'off', modelId: 'gpt-6.1-sol', toolExecutionMode: 'script_only' },
         async listTools() { throw new Error('must reject mode first'); },
         async *stream() { streamed = true; },
+        async updateSettings() { assert.fail('must reject mode before configuration'); },
         async close() { h.captured.closed = true; },
       } as unknown as FakeSession;
     };
@@ -337,9 +342,10 @@ describe('runAdapter', () => {
     let streamed = false;
     h.deps.createSession = async () => ({
       id: 'no-tools-session',
-      settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+      settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
       async listTools() { return []; },
       async *stream() { streamed = true; },
+      async updateSettings() {},
       async close() { h.captured.closed = true; },
     } as unknown as FakeSession);
     assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
@@ -353,9 +359,10 @@ describe('runAdapter', () => {
       const h = harness([]);
       h.deps.createSession = async () => ({
         id: 'unknown-mode',
-        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: mode },
+        settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: mode },
         async listTools() { assert.fail('must reject mode first'); },
         async *stream() { assert.fail('must not spend a turn'); },
+        async updateSettings() {},
         async close() { h.captured.closed = true; },
       } as unknown as FakeSession);
       assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
@@ -384,9 +391,10 @@ describe('runAdapter', () => {
       const h = harness([]);
       h.deps.createSession = async () => ({
         id: 'blocked-tool',
-        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+        settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
         async listTools() { return ['Read', 'Edit', 'Create'].filter((id) => id !== missing).map((id) => ({ id, allowed: true })); },
         async *stream() { assert.fail('must not spend a turn'); },
+        async updateSettings() {},
         async close() { h.captured.closed = true; },
       } as unknown as FakeSession);
       assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
@@ -400,9 +408,10 @@ describe('runAdapter', () => {
       const h = harness([]);
       h.deps.createSession = async () => ({
         id: 'read-blocked',
-        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+        settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
         async listTools() { return ['Read', 'Edit', 'Create'].map((id) => ({ id, allowed: id !== blocked })); },
         async *stream() { assert.fail('must not spend a turn'); },
+        async updateSettings() {},
         async close() { h.captured.closed = true; },
       } as unknown as FakeSession);
       assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
@@ -417,12 +426,13 @@ describe('runAdapter', () => {
       let streamed = false;
       h.deps.createSession = async () => ({
         id: 'registered-tools',
-        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+        settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
         async listTools() { return ['Read', 'Edit', 'Create'].map((id) => ({ id, allowed: id === 'Read' || allowed, defaultAllowed: id === 'Read' })); },
         async *stream() {
           streamed = true;
           yield { type: 'result', success: true, sessionId: 'registered-tools', text: 'done' };
         },
+        async updateSettings() {},
         async close() { h.captured.closed = true; },
       } as unknown as FakeSession);
       assert.equal(await runAdapter(input, h.deps), allowed ? EXIT_OK : EXIT_RUN_FAILED);
@@ -449,7 +459,7 @@ describe('runAdapter', () => {
       assert.equal(options.modelId, DEFAULT_MODEL_ID);
       return {
         id: 'direct-tools',
-        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+        settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
         async listTools(options: { toolIds: string[] }) {
           calls.push('tools');
           assert.deepEqual(options.toolIds, ['Read', 'Edit', 'Create']);
@@ -459,11 +469,12 @@ describe('runAdapter', () => {
           calls.push('stream');
           yield { type: 'result', success: true, sessionId: 'direct-tools', text: 'done' };
         },
+        async updateSettings() { calls.push('update'); },
         async close() { calls.push('close'); },
       } as unknown as FakeSession;
     };
     assert.equal(await runAdapter(input, h.deps), EXIT_OK);
-    assert.deepEqual(calls, ['models', 'create', 'tools', 'stream', 'close']);
+    assert.deepEqual(calls, ['models', 'create', 'update', 'tools', 'stream', 'close']);
   });
 
   it('reports model discovery errors without creating a session', async () => {
@@ -474,13 +485,57 @@ describe('runAdapter', () => {
     assert.match((h.emitted.at(-1) as { summary: string }).summary, /claude-sonnet-4-6.*metadata unavailable/);
   });
 
+  it('enables only the approved wire tool IDs before checking actual availability', async () => {
+    const h = harness([]);
+    let configured = false;
+    h.deps.createSession = async (options) => ({
+      id: 'explicit-enable',
+      settings: { autonomyLevel: 'off', modelId: options.modelId, toolExecutionMode: 'direct_only' },
+      async updateSettings(overrides: unknown) {
+        assert.deepEqual(overrides, { enabledToolIds: ['Read', 'Edit', 'Create'], disabledToolIds: [...DISABLED_TOOL_IDS] });
+        configured = true;
+      },
+      async listTools(params: unknown) {
+        assert.equal(configured, true);
+        assert.deepEqual(params, { toolIds: ['Read', 'Edit', 'Create'] });
+        return ['Read', 'Edit', 'Create'].map((id) => ({ id, allowed: id === 'Read' || configured }));
+      },
+      async *stream() { yield { type: 'result', success: true, sessionId: 'explicit-enable', text: 'done' }; },
+      async close() { h.captured.closed = true; },
+    } as unknown as FakeSession);
+    assert.equal(await runAdapter(input, h.deps), EXIT_OK);
+    assert.equal(h.captured.closed, true);
+    assert.ok(h.emitted.some((message) => message.type === 'log' && message.message === 'permission handler audit: invoked=0'));
+  });
+
+  for (const changed of ['autonomyLevel', 'toolExecutionMode', 'modelId', 'update-error']) {
+    it(`fails closed on post-configuration ${changed} without streaming or escalation`, async () => {
+      const h = harness([]);
+      const settings: Record<string, string> = { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' };
+      h.deps.createSession = async () => ({
+        id: 'configuration-failed', settings,
+        async updateSettings() {
+          if (changed === 'update-error') throw new Error('wire update rejected');
+          settings[changed] = { autonomyLevel: 'low', toolExecutionMode: 'script_only', modelId: 'other-model' }[changed]!;
+        },
+        async listTools() { assert.fail('must reject settings first'); },
+        async *stream() { assert.fail('must not start a model turn'); },
+        async close() { h.captured.closed = true; },
+      } as unknown as FakeSession);
+      assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
+      assert.equal(h.captured.closed, true);
+      assert.equal((h.emitted.at(-1) as { usage: { factory_credits: null } }).usage.factory_credits, null);
+    });
+  }
+
   it('rejects effective model substitution before streaming', async () => {
     const h = harness([]);
     h.deps.createSession = async () => ({
       id: 'wrong-model',
-      settings: { modelId: 'other-model', toolExecutionMode: 'direct_only' },
+      settings: { autonomyLevel: 'off', modelId: 'other-model', toolExecutionMode: 'direct_only' },
       async listTools() { assert.fail('must reject model first'); },
       async *stream() { assert.fail('must not spend a turn'); },
+      async updateSettings() {},
       async close() { h.captured.closed = true; },
     } as unknown as FakeSession);
     assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
@@ -492,9 +547,10 @@ describe('runAdapter', () => {
     const h = harness([]);
     h.deps.createSession = async () => ({
       id: 'tool-error',
-      settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+      settings: { autonomyLevel: 'off', modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
       async listTools() { throw new Error('tool metadata unavailable'); },
       async *stream() { assert.fail('must not spend a turn'); },
+      async updateSettings() {},
       async close() { h.captured.closed = true; },
     } as unknown as FakeSession);
     assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
@@ -509,6 +565,7 @@ describe('runAdapter', () => {
     assert.equal(options.autonomyLevel, 'off');
     assert.ok(options.disabledToolIds!.includes('Script'));
     assert.ok(options.disabledToolIds!.includes('Execute'));
+    assert.ok(options.disabledToolIds!.includes('WaitForScript'));
     assert.ok(!options.disabledToolIds!.includes('Read'));
     assert.ok(!options.disabledToolIds!.includes('Create'));
     assert.ok(!options.disabledToolIds!.includes('Edit'));
@@ -520,7 +577,7 @@ describe('runAdapter', () => {
     const target = path.join(root, 'demo_app', 'mock_generated.py');
     h.deps.createSession = async (options) => ({
       id: 'direct-edit-session',
-      settings: { modelId: options.modelId, toolExecutionMode: 'direct_only' },
+      settings: { autonomyLevel: 'off', modelId: options.modelId, toolExecutionMode: 'direct_only' },
       async listTools() { return [{ id: 'Read', allowed: true }, { id: 'Create', allowed: true }, { id: 'Edit', allowed: true }]; },
       async *stream() {
         assert.equal(options.autonomyLevel, 'off');
@@ -528,13 +585,26 @@ describe('runAdapter', () => {
         writeFileSync(target, 'ORDERING = "popular"\n');
         yield { type: 'result', success: true, sessionId: 'direct-edit-session', text: 'mock edit applied' };
       },
+      async updateSettings() {},
       async close() { h.captured.closed = true; },
     } as unknown as FakeSession);
     assert.equal(await runAdapter(input, h.deps), EXIT_OK);
     assert.equal(readFileSync(target, 'utf8'), 'ORDERING = "popular"\n');
     assert.equal(h.captured.closed, true);
     assert.ok(h.emitted.some((message) => message.type === 'log' && message.message.includes('permission proceed_once')));
+    assert.ok(h.emitted.some((message) => message.type === 'log' && message.message === 'permission handler audit: invoked=1'));
     rmSync(target);
+  });
+});
+
+describe('verifyWriteSandbox', () => {
+  it('rejects missing sandbox ownership and unsupported platforms', () => {
+    assert.throws(() => verifyWriteSandbox(root, {}, 'darwin'), /engine-managed macOS write sandbox/);
+    assert.throws(() => verifyWriteSandbox(root, { PARADOX_DROID_SANDBOX: 'macos-write-v1' }, 'linux'), /engine-managed macOS write sandbox/);
+  });
+
+  it('rejects a forged marker in an unsandboxed process', () => {
+    assert.throws(() => verifyWriteSandbox(root, { PARADOX_DROID_SANDBOX: 'macos-write-v1' }, 'darwin'), /permits writes outside demo_app/);
   });
 });
 

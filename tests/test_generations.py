@@ -264,6 +264,7 @@ def test_droid_python_adapter_protocol_is_not_cli_only(tmp_path, monkeypatch):
     adapter = tmp_path / "adapter.js"
     adapter.write_text("if(process.env.PARADOX_TOKEN)process.exit(8);process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({type:'result',exit_code:0,session_id:'sdk-session',summary:'SDK result',usage:{input_tokens:12,output_tokens:3,factory_credits:0.1}})));\n")
     monkeypatch.setattr(providers, "ADAPTER", adapter)
+    monkeypatch.setattr(providers.droid_sandbox, "prepare", lambda code, command, environment: (command, environment))
     monkeypatch.setenv("FACTORY_API_KEY", "test-only-factory-key")
     monkeypatch.setenv("PARADOX_TOKEN", "not-forwarded")
     result = Providers().run("droid", "prompt", tmp_path, JobControl(), tmp_path / "agent.log")

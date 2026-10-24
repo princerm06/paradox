@@ -18,7 +18,8 @@
  * itself. This file never prints or forwards the key.
  */
 
-import { accessSync, constants as fsConstants, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants as fsConstants, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -319,7 +320,7 @@ export function parseInput(raw: string): AdapterInput {
 // ---------------------------------------------------------------------------
 
 export interface RunnerDeps {
-  createSession: (options: CreateSessionOptions) => Promise<Pick<DroidSession, 'id' | 'settings' | 'listTools' | 'stream' | 'close'>>;
+  createSession: (options: CreateSessionOptions) => Promise<Pick<DroidSession, 'id' | 'settings' | 'updateSettings' | 'listTools' | 'stream' | 'close'>>;
   listModels: typeof import('@factory/droid-sdk/node')['listModels'];
   /** SDK `AutonomyLevel.Off`; injected so tests need not load the SDK. */
   autonomyOff: CreateSessionOptions['autonomyLevel'];
@@ -332,8 +333,10 @@ export interface RunnerDeps {
 /** Run one Droid turn and emit protocol messages. Returns the process exit code. */
 export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise<number> {
   const env = deps.env ?? process.env;
+  let permissionCalls = 0;
   const log = (text: string) => deps.emit({ type: 'log', message: sanitize(text, MAX_LOG_CHARS, env) });
   const finish = (exitCode: number, sessionId: string | null, summary: string | null, usage = emptyUsage()) => {
+    log(`permission handler audit: invoked=${permissionCalls}`);
     deps.emit({
       type: 'result',
       exit_code: exitCode,
@@ -375,6 +378,7 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
       disableBuiltinSkills: true,
       abortSignal: deps.abortSignal,
       permissionHandler: (params): RequestPermissionHandlerResult => {
+        permissionCalls += 1;
         const decision = decidePermission(root, params as unknown as PermissionRequest, path.join(root, 'demo_app'));
         log(`permission ${decision.outcome}: ${decision.reason}`);
         return decision.outcome as RequestPermissionHandlerResult;
@@ -382,14 +386,27 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
       // No askUserHandler: the SDK declines AskUser requests without one.
     });
     log(`session started: ${session.id}`);
+    const verifySettings = () => {
+      if (session!.settings?.toolExecutionMode !== 'direct_only') {
+        throw new Error(`Droid model "${modelId}" has effective toolExecutionMode "${session!.settings?.toolExecutionMode ?? 'unknown'}"; direct_only is required. Script remains disabled. Select a compatible PARADOX_DROID_MODEL or update the SDK/CLI if mode metadata is missing.`);
+      }
+      if (session!.settings.modelId !== modelId) {
+        throw new Error(`Requested Droid model "${modelId}" but initialized "${session!.settings.modelId ?? 'unknown'}"; refusing a silent model substitution.`);
+      }
+      if (session!.settings.autonomyLevel !== deps.autonomyOff) {
+        throw new Error(`Droid model "${modelId}" must retain AutonomyLevel.Off; got "${session!.settings.autonomyLevel ?? 'unknown'}". No autonomy escalation is permitted.`);
+      }
+    };
+    verifySettings();
+    const overrides = { enabledToolIds: ['Read', 'Edit', 'Create'], disabledToolIds: [...DISABLED_TOOL_IDS] };
+    try {
+      await session.updateSettings(overrides);
+    } catch (error) {
+      throw new Error(`Cannot explicitly enable direct file tools for Droid model "${modelId}" with autonomy Off: ${errorText(error)}`);
+    }
+    verifySettings();
     const mode = session.settings?.toolExecutionMode;
-    log(`session model: ${session.settings?.modelId ?? 'unknown'}; tool execution mode: ${mode ?? 'unknown'}`);
-    if (mode !== 'direct_only') {
-      throw new Error(`Droid model "${modelId}" has effective toolExecutionMode "${mode ?? 'unknown'}"; direct_only is required. Script remains disabled. Select a compatible PARADOX_DROID_MODEL or update the SDK/CLI if mode metadata is missing.`);
-    }
-    if (session.settings.modelId !== modelId) {
-      throw new Error(`Requested Droid model "${modelId}" but initialized "${session.settings.modelId ?? 'unknown'}"; refusing a silent model substitution.`);
-    }
+    log(`session model: ${session.settings.modelId}; tool execution mode: ${mode}; autonomy: ${session.settings.autonomyLevel}; explicitly enabled: Read, Edit, Create`);
     let tools: Awaited<ReturnType<DroidSession['listTools']>>;
     try {
       tools = await session.listTools({ toolIds: ['Read', 'Edit', 'Create'] });
@@ -435,6 +452,30 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
     if (session) {
       await session.close().catch((error: unknown) => deps.diagnostic(sanitize(`close failed: ${errorText(error)}`)));
     }
+  }
+}
+
+export function verifyWriteSandbox(root: string, env = process.env, platform = process.platform): void {
+  if (platform !== 'darwin' || env.PARADOX_DROID_SANDBOX !== 'macos-write-v1') {
+    throw new Error('Droid requires the engine-managed macOS write sandbox; no unsandboxed fallback');
+  }
+  const outside = path.join(root, `.sandbox-denied-${randomUUID()}`);
+  let inside: string | undefined;
+  let outsideCreated = false;
+  try {
+    inside = mkdtempSync(path.join(root, 'demo_app', '.sandbox-allowed-'));
+    writeFileSync(path.join(inside, 'probe'), 'allowed');
+    try {
+      writeFileSync(outside, 'must be denied', { flag: 'wx' });
+      outsideCreated = true;
+    } catch (error) {
+      if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return;
+      throw error;
+    }
+    throw new Error('Droid write sandbox permits writes outside demo_app; refusing SDK initialization');
+  } finally {
+    if (inside) rmSync(inside, { recursive: true, force: true });
+    if (outsideCreated) rmSync(outside, { force: true });
   }
 }
 
@@ -523,9 +564,10 @@ export async function main(argv: string[]): Promise<number> {
 
   let sdk: typeof import('@factory/droid-sdk/node');
   try {
+    verifyWriteSandbox(input.cwd);
     sdk = await import('@factory/droid-sdk/node');
   } catch (error) {
-    const text = `cannot load @factory/droid-sdk/node: ${errorText(error)}`;
+    const text = `Droid sandbox/SDK initialization failed: ${errorText(error)}`;
     writeDiagnostic(text);
     writeJsonLine({ type: 'result', exit_code: EXIT_SDK_UNAVAILABLE, session_id: null, summary: sanitize(text), usage: emptyUsage() });
     return EXIT_SDK_UNAVAILABLE;

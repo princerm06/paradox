@@ -10,14 +10,16 @@ The production call chain is:
 1. `POST /api/generations` selects an explicit provider or `PARADOX_AGENT`
    (default `droid`). `Generations.run` checkpoints the parent and copies its
    code and SQLite state into a generation workspace.
-2. `engine/providers.py` starts `node .../dist/adapter.js`. Its single stdin
+2. `engine/providers.py` starts `node .../dist/adapter.js` through the mandatory
+   macOS write sandbox (`engine/droid_sandbox.py`, `write_sandbox.sb`). Its stdin
    request contains the isolated code directory and wrapped feature prompt.
    Only the SDK subprocess receives `FACTORY_API_KEY`; validation does not.
 3. `src/adapter.ts` dynamically imports **`@factory/droid-sdk/node`**, then calls
    **`createSession`** with `cwd`, **`AutonomyLevel.Off`**, **`disabledToolIds`**,
    **`permissionHandler`**, **`abortSignal`**, and disabled built-in skills.
    It explicitly selects `modelId` (default `claude-sonnet-4-6`, override
-   `PARADOX_DROID_MODEL`), checks the session's `toolExecutionMode`, and calls
+   `PARADOX_DROID_MODEL`), checks the session's `toolExecutionMode`, explicitly
+   enables Read/Edit/Create using `session.updateSettings`, and calls
    **`session.listTools`** before streaming. SDK **`listModels`** first checks
    availability and organization restrictions; the initialized model must match
    the requested ID. Read, Edit and Create must each report `allowed === true`.
@@ -49,8 +51,8 @@ SDK authentication.
 
 ## Reproduce one real generation
 
-**Do not repeat the paid command below without fresh user approval.** The one
-authorized run failed; the subsequent investigation and fixes are offline.
+**Do not repeat the paid command below without fresh user approval.** Both
+authorized runs failed; the subsequent investigation and fixes are offline.
 
 Install Python dependencies, Node 20+, the Factory CLI, and securely configure
 `FACTORY_API_KEY` in the invoking environment. Never paste it into a command,
@@ -356,11 +358,14 @@ Option 1 final offline validation (Factory key unset for both Python commands):
   **134 passed, 1 skipped in 204.59 seconds**; the live Droid test was skipped.
 - `git diff --check`: passed.
 
-The new regressions cover allowed and approval-needed writes, missing write
+The historical Option 1 regressions covered allowed and purported approval-needed writes, missing write
 tools, missing/disallowed Read, static write-tool exclusion from the disabled
 list, both catalog flags in logs, and the exact production `demo_app` write-root
 path/escape matrix. The mocked SDK direct-file edit now exercises registered
-writes with `allowed: false` and still requires permission-handler approval.
+writes with `allowed: false` and simulated permission-handler approval. Run 2
+disproved that model of CLI behavior: those tools were hidden. The strict
+restoration below rejects that catalog; this paragraph is historical evidence,
+not the current policy or proof of real permission invocation.
 No paid/live generation, push, merge, or Studio modification occurred.
 
 The second user-approved run above failed; it did not establish successful
@@ -672,3 +677,148 @@ Python commands unset `FACTORY_API_KEY`. Both research scripts pass `node --chec
 the sandbox smoke assertions passed, SDK metadata probes exited 0, and
 `git diff --check` passed. Failed bare-CLI selector controls are recorded above
 and are not test-suite failures or hidden successful-probe claims.
+
+## Approved production wiring: Off + explicit file tools + write sandbox
+
+This section supersedes the earlier **not implemented** research recommendation.
+The user approved implementation and offline testing only. No third paid run or
+model turn was performed. The first two failures and their reported costs
+(5,222 and 133,563 Factory credits) remain failures, not successful proofs.
+
+### Exact SDK configuration and fail-closed checks
+
+Production still pins `modelId` to `PARADOX_DROID_MODEL` or
+`claude-sonnet-4-6`, uses `AutonomyLevel.Off`, unchanged `DISABLED_TOOL_IDS`,
+`autoRejectPermissionRequests: false`, the existing demo_app-scoped
+`permissionHandler`, disabled built-in skills and cancellation's abort signal.
+It verifies initialized exact model, `direct_only` and Off, then performs:
+
+```ts
+const overrides = {
+  enabledToolIds: ['Read', 'Edit', 'Create'],
+  disabledToolIds: [...DISABLED_TOOL_IDS],
+};
+await session.updateSettings(overrides);
+```
+
+It rechecks model/mode/autonomy, queries the actual session with only
+`listTools({toolIds: ['Read', 'Edit', 'Create']})`, logs allowed/defaultAllowed,
+and requires all three allowed=true before `session.stream`. No hypothetical
+catalog override can satisfy the gate. Update errors, ignored enablement,
+unknown modes, changed models, unavailable/organization-disabled models and
+missing/disallowed tools fail at `agent`; sessions close in finally. The guard
+still rejects a successful SDK response with no real source changes. There is
+no automatic provider/model/autonomy fallback, and Script/Execute/WaitForScript
+remain disabled. The new audit line `permission handler audit: invoked=N`
+records actual callback calls, including zero; mocks demonstrate recording but
+are not evidence that a live enabled-write session invoked the callback.
+
+The enablement wire field is intentionally the user-approved compatibility
+path established in the previous source/protocol investigation: SDK 0.10.0's
+public settings schema omits it, but `DroidSession.updateSettings` forwards the
+object to the CLI, which accepts it. Production passes the structurally typed
+variable without a schema parse or cast. The strict actual-session gate catches
+an SDK/CLI version that stops accepting it. Retest this path on upgrades.
+
+### Independent production enforcement
+
+`engine/droid_sandbox.py` invokes `/usr/bin/sandbox-exec` around the Node adapter
+and therefore its SDK/CLI descendants. The packaged profile denies file-write*
+except for the canonical isolated `code/demo_app/`, private per-job
+`workspace/.code-droid/home/.factory/`, private
+`workspace/.code-droid/tmp/`, and `/dev/null`. Operational directories are 0700;
+HOME/TMPDIR are replaced, so the user's shared Factory home is not writable.
+The profile allows network for Factory authentication/inference and permits
+reads. Application code outside demo_app, engine files, database state and
+other futures are not write exceptions. The profile is narrower than the
+historical research prototype; it does not allow the whole workspace or shared
+Factory sessions/logs. The SDK still uses the real key only in its environment;
+probe environments omit it, and tests do not print or commit credentials.
+
+`/api/agents` checks the OS/binary/profile and a zero-network kernel write-deny
+probe in addition to the existing offline Node/SDK/CLI/key checks; no model or
+catalog RPC occurs in this endpoint. Every job performs an independent
+allow-scratch/deny-code-root check before SDK launch. The adapter itself then
+requires the engine marker AND verifies demo_app writing succeeds and a
+code-root write fails before importing the SDK. A forged marker or permissive
+profile is insufficient. Sandbox startup failure is terminal, not an opt-out.
+Non-macOS platforms fail closed rather than running an unprotected Droid.
+
+### Offline evidence on macOS
+
+Automated production-profile tests (key unset) verify:
+
+- demo_app writes succeed; code-root README, engine.py, outside sentinels and
+  generation state SQLite writes fail with EPERM/EACCES and preserve bytes.
+- A symlink within demo_app pointing outside does not permit an outside write;
+  linking an outside file into demo_app is denied. A spawned Node child inherits
+  the restriction. Private Factory and scratch writes succeed.
+- A forged marker on an unsandboxed Node process and an allow-all sandbox
+  profile are rejected. Missing platform/binary/profile, startup exit, timeout
+  and OSError fail closed. API failure remains stage agent, no timeline or
+  scripted substitution. Existing timeout/cancel/no-edit regressions remain.
+- The production permission policy is tested with
+  `writeRoot=path.join(root, 'demo_app')`: relative/absolute demo paths pass;
+  workspace-root README, engine/x.py, traversal, absolute outside paths,
+  escaping symlinks, demo_app/node_modules, directory-only targets, an
+  apply_patch move outside demo_app, exec and script all fail.
+- Required network capability is tested only by a local TCP round-trip, not by
+  an external request or model turn.
+- The real installed CLI starts with the private empty HOME under the profile
+  with an additional `(deny network*)`, using metadata-only `--list-tools`.
+- The real official SDK creates a metadata-only session under that same
+  network-denied production profile/private HOME, then enables the three file
+  tools. Actual settings retain model claude-sonnet-4-6, Off, direct_only;
+  Read/Edit/Create each report allowed=true, Execute reports allowed=false.
+  Script/WaitForScript are absent from this direct-only catalog (absence and
+  disallowed entries are both non-exposure; they remain in disabledToolIds).
+  It records permissionRequests=0 and modelTurns=0 and never calls stream.
+  `research/sdk_metadata.mjs` uses the SDK's explicit ProcessTransport only for
+  this key-unset offline metadata research, not production authentication.
+
+Reproduce these zero-cost checks from this worktree:
+
+```sh
+env -u FACTORY_API_KEY npm --prefix engine/droid_adapter test
+env -u FACTORY_API_KEY .venv/bin/python -m pytest tests/test_droid_sandbox.py tests/test_droid_provider.py -q
+env -u FACTORY_API_KEY .venv/bin/python -m pytest tests/test_droid_sandbox.py tests/test_droid_provider.py tests/test_generations.py -q
+env -u FACTORY_API_KEY .venv/bin/python -m pytest -q
+```
+
+The tests construct the exact sandbox-exec command using production `prepare`;
+for the real SDK metadata check the final argv is
+`node engine/droid_adapter/research/sdk_metadata.mjs off <isolated-code> enabled`,
+wrapped by the production profile plus `(deny network*)`. No real model stream
+or paid verifier command is invoked. CLI/catalog tests require the installed CLI and
+built SDK; kernel tests skip on non-macOS, where production Droid is unavailable.
+
+### Remaining limitations and approval boundary
+
+sandbox-exec is deprecated and macOS-specific; availability is not a guarantee
+of support on other OS releases. Allow-default IPC/network/reads and writable
+operational directories are not a full malicious-code sandbox. Factory-key
+exfiltration, arbitrary reads, non-filesystem side effects, compromised CLI
+behavior and sandbox escapes are outside the assurance here. Inherited stdout
+log descriptors are deliberate writable exceptions; private Factory logs may
+contain sensitive session content and should not be published wholesale. The
+engine should still be run only on trusted local projects. The permission
+handler additionally blocks node_modules/.git inside demo_app, but the kernel
+profile itself permits demo_app writes and does not independently implement
+all per-file handler policy. No untrusted subprocess capability is enabled.
+
+Private-HOME real authentication, networked model execution, actual permission
+callback invocation for model writes, generated edits/validation/adoption,
+CLI updates and live cancellation remain unproven for this configuration.
+Offline source and catalog evidence must not be described as end-to-end SDK
+success. A third paid verification needs the user's separate explicit approval;
+it was not run as part of this work.
+
+Offline checks after production wiring: Node **48 passed** (TypeScript build
+included); sandbox/provider Python **45 passed in 14.35s**; expanded
+sandbox/provider/generation Python **66 passed in 51.15s**. Commands unset
+FACTORY_API_KEY. An initial full-suite run exposed one older protocol mock
+that did not mock the newly mandatory sandbox boundary; that mock is now
+explicitly isolated, while the independent real-kernel tests remain enabled.
+The corrected full offline Python suite passed **154 tests, 1 live test skipped,
+in 224.02s** with FACTORY_API_KEY unset. `git diff --check` passed. No paid run,
+real model turn, frontend/scripted-provider change, push or merge was performed.

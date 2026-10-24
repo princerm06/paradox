@@ -30,6 +30,8 @@ def adapter(tmp_path, monkeypatch):
     monkeypatch.setattr(providers, "ADAPTER", path)
     monkeypatch.setenv("FACTORY_API_KEY", "test-only-droid-provider-key")
     monkeypatch.setenv("PARADOX_AGENT", "droid")
+    monkeypatch.setattr(providers.droid_sandbox, "availability_reason", lambda: None)
+    monkeypatch.setattr(providers.droid_sandbox, "prepare", lambda code, command, environment: (command, environment))
     monkeypatch.delenv("PARADOX_TOKEN", raising=False)
     original_which = shutil.which
     monkeypatch.setattr(shutil, "which", lambda command: "/test/droid" if command == "droid" else original_which(command))
@@ -199,6 +201,28 @@ def test_droid_model_override_is_not_forwarded_to_validation(monkeypatch):
     monkeypatch.setenv("PARADOX_DROID_MODEL", "claude-sonnet-4-6")
     assert scrubbed_environment("droid")["PARADOX_DROID_MODEL"] == "claude-sonnet-4-6"
     assert "PARADOX_DROID_MODEL" not in scrubbed_environment()
+
+
+def test_sandbox_unavailable_is_reported_offline_without_fallback(adapter, monkeypatch):
+    write_adapter(adapter, "throw Error('must not run');")
+    monkeypatch.setattr(providers.droid_sandbox, 'availability_reason', lambda: 'macOS sandbox enforcement unavailable')
+    result = Providers().availability('droid')
+    assert not result['available']
+    assert 'sandbox' in result['reason']
+
+
+def test_sandbox_initialization_failure_is_agent_failure_without_fallback(adapter, tmp_path, monkeypatch):
+    write_adapter(adapter, "throw Error('SDK must not start');")
+    def fail_sandbox(*args):
+        raise RuntimeError('Droid write sandbox enforcement failed; refusing to start the SDK')
+    monkeypatch.setattr(providers.droid_sandbox, 'prepare', fail_sandbox)
+    with TestClient(app(tmp_path)) as client:
+        record = terminal(client, submit(client))
+        assert record['provider'] == 'droid' and record['status'] == 'failed'
+        assert record['error']['stage'] == 'agent'
+        assert 'sandbox enforcement failed' in record['error']['message']
+        assert record['timeline_id'] is None
+        assert len(client.get('/api/timelines').json()['timelines']) == 1
 
 
 def test_duplicate_results_are_rejected(adapter, tmp_path):

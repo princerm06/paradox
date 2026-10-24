@@ -20,6 +20,9 @@ available only once `dist/adapter.js` exists.
 ## Runtime requirements
 
 - **Node.js >= 20.** The SDK itself declares `>=18`.
+- **macOS with working `/usr/bin/sandbox-exec`.** Kernel enforcement is
+  checked offline and for every job. Unsupported or failed sandboxes stop
+  Droid; there is no unsandboxed or Autonomy Low fallback.
 - **The `droid` CLI on `PATH`.** The SDK's Node entrypoint
   (`@factory/droid-sdk/node`) does not call the Factory API directly. It spawns
   the `droid` CLI as a child process and talks to it over JSON-RPC on stdio. If
@@ -34,11 +37,12 @@ available only once `dist/adapter.js` exists.
 
 ## Protocol
 
-Launch with an absolute script path and the scratch workspace as the process
-cwd:
+Start the Python engine; it launches the adapter inside the mandatory write
+sandbox, with the isolated code directory as cwd. Bare adapter launches are
+rejected before SDK initialization (except the offline `--probe`):
 
 ```bash
-node /abs/path/engine/droid_adapter/dist/adapter.js
+.venv/bin/python -m engine
 ```
 
 **stdin** is a single JSON object, followed by EOF:
@@ -140,7 +144,12 @@ It does not inherit an arbitrary CLI model default. Before `session.stream`, it
 uses SDK `listModels({cwd, includeDisabled: true})` to reject unavailable or
 organization-disabled models, verifies the initialized model ID matches the
 requested ID, checks `session.settings.toolExecutionMode === 'direct_only'`,
-and requires `session.listTools` to report **Read, Edit and Create each with
+and verifies autonomy stays Off. It then calls `session.updateSettings` with
+`enabledToolIds: ['Read', 'Edit', 'Create']` and the unchanged disabled IDs.
+This CLI wire field works with SDK 0.10.0/CLI 0.249.0; SDK 0.10.0's settings
+schema omits it, although the SDK forwards the raw object. After configuration
+the adapter rechecks model/mode/autonomy and requires the actual-session
+`session.listTools({toolIds: ['Read', 'Edit', 'Create']})` to report each with
 `allowed === true`**. The second paid run showed that registered writes with
 `allowed: false` are hidden from the model, not awaiting handler approval. Missing or
 unknown mode metadata fails closed. Script-only sessions
@@ -149,12 +158,31 @@ bypass the adapter's file-only permission policy. `AutonomyLevel.Off` remains
 enabled; direct edit/create permission requests still receive `proceed_once`
 only for valid paths. ApplyPatch is not a substitute for missing Edit/Create.
 Disabled tools can remain in the catalog with `allowed: false`, so a static
-regression ensures Edit/Create are never in `DISABLED_TOOL_IDS`; the scoped
-permission handler remains the write boundary. Logs record both `allowed`
+regression ensures Edit/Create are never in `DISABLED_TOOL_IDS`. The scoped
+handler and independent kernel restriction enforce demo-only application
+writes. Logs record both `allowed`
 and `defaultAllowed` for all three tools. No autonomy increase or hypothetical
 weaker-settings probe is used. See `VERIFICATION.md` for offline evidence.
 Model/tool discovery uses metadata RPCs, not model turns; `/api/agents` does
 not make those authenticated calls and remains an offline prerequisite probe.
+
+## Mandatory write sandbox
+
+`engine/droid_sandbox.py` wraps Node and its SDK/CLI descendants in
+`write_sandbox.sb`. Network is allowed, reads are unrestricted, and filesystem
+writes are denied except to canonical `code/demo_app/`, a private per-job
+Factory home, private scratch, and `/dev/null`. HOME and TMPDIR point to these
+0700 operational directories, not the user's existing Factory home. The code
+root, engine, sibling source, and generation SQLite state are not writable.
+Python verifies allow/deny behavior before launch; Node verifies an actual
+demo write and denied code-root write before importing the SDK. A marker alone
+does not establish enforcement. Failed probes stop at the existing `agent`
+stage without provider fallback.
+
+The final audit log records `permission handler audit: invoked=N` in addition
+to each permission decision. Zero invocations do not prove handler enforcement.
+Kernel tests independently reject outside writes, symlink/hard-link escapes,
+and child-process writes outside the application boundary.
 
 ## Known limitations
 
@@ -167,16 +195,17 @@ not make those authenticated calls and remains an offline prerequisite probe.
 - **The tool block is subtractive only.** The public SDK has no allowlist (the
   docs say so explicitly). A tool introduced by a newer `droid` CLI that is not
   in `DISABLED_TOOL_IDS` is not disabled. If it asks for permission, the handler
-  still cancels it. If it does not ask, nothing stops it.
+  still cancels it. Otherwise the kernel write boundary remains, but reads,
+  network and other side effects are not comprehensively restricted.
 - **Reads cannot be scoped.** Read-only tools (`Read`, `LS`, `Glob`, `Grep`)
   may run without a permission request, so the handler cannot keep them inside
   `cwd`. The SDK offers no read-path restriction. Edits are scoped, and reads
-  outside `cwd` are not prevented by this adapter. Run it inside an OS-level
-  sandbox or container if that matters.
-- **This is a turn-level limit only.** The adapter limits what Droid's agent
-  does in this session. It does not sandbox the `droid` CLI process itself,
-  which runs with the engine's user permissions and needs network access to
-  reach Factory.
+  outside `cwd` are not prevented by the adapter or write sandbox.
+- **Not hostile-code isolation.** sandbox-exec is deprecated/macOS-only.
+  Allow-default IPC/network/reads, operational directories and inherited log
+  descriptors remain exceptions. This is defense in depth, not a container or
+  protection against a compromised CLI. No real turn has verified private-HOME
+  compatibility or actual permission-handler invocation with enabled writes.
 - **Python owns the timeout.** The engine enforces a 300-second deadline, sends
   SIGTERM, waits up to one second, then kills the process group. The adapter
   aborts the session on SIGTERM/SIGINT and reports exit code 130 when it can.

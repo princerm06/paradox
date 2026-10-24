@@ -7,6 +7,7 @@ import subprocess
 import time
 
 from engine.jobs import log_line, redact, scrubbed_environment
+from engine import droid_sandbox
 
 
 ADAPTER = Path(__file__).with_name("droid_adapter") / "dist" / "adapter.js"
@@ -30,6 +31,8 @@ class Providers:
                 reason = "droid CLI required by the official SDK is not installed on PATH"
             elif not os.environ.get("FACTORY_API_KEY"):
                 reason = "FACTORY_API_KEY is not configured"
+            elif (sandbox_reason := droid_sandbox.availability_reason()):
+                reason = sandbox_reason
             else:
                 try:
                     version = subprocess.run([shutil.which("node"), "--version"], capture_output=True, timeout=5, env=scrubbed_environment())
@@ -93,7 +96,11 @@ class Providers:
                 + prompt
             )
             payload = json.dumps({"cwd": str(code), "prompt": wrapped}).encode()
-            exit_code = control.run([shutil.which("node"), str(ADAPTER)], code, log, 300, scrubbed_environment("droid"), payload)
+            control.check()
+            command, environment = droid_sandbox.prepare(code, [shutil.which("node"), str(ADAPTER)], scrubbed_environment("droid"))
+            log_line(log, 'Droid macOS write sandbox verified: demo_app only; private Factory home and scratch; network allowed')
+            control.check()
+            exit_code = control.run(command, code, log, 300, environment, payload)
             result = None
             with log.open(encoding="utf-8", errors="replace") as output:
                 for line in output:
