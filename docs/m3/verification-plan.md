@@ -2,12 +2,16 @@
 
 ## 1. Merge order (each step needs user approval)
 
-1. **PR #10, `fix/health-storage-gate`**: a small crash fix with no dependencies.
-2. **PR #9, `test/timeline-isolation`**: the SQLite restart fix plus 14 regressions. #10 + #9 together have been tested: 124 passed, 1 skipped.
-3. **`fix/validation-hardening`** (Codex 2, P0): must be on `main` before the third paid run.
-4. **`feat/droid-verification`** (Codex 1): rebase onto 1–3, rerun all suites, and then do the third paid run *from the rebased commit*.
-5. **`feat/demo-rehearsal`** (Codex 2, P1): independent of the rest.
-6. **`feat/ui-shell` / `apps/studio`** (frontend): after it's pushed and checked against the contract.
+1. **#10 `fix/health-storage-gate`**: a crash fix with no dependencies.
+2. **#9 `test/timeline-isolation`**: the SQLite restart fix plus 14 regressions.
+3. **#12 `fix/validation-hardening`**: validation integrity. Must precede #13.
+4. **#13 `feat/droid-verification`**: live Droid generation in the sandbox. Steps 1–4 equal the tested `integration/m3` @ `6731c50`.
+5. **#14 `feat/demo-rehearsal`**: additive.
+6. **#15 `test/long-generation-reliability`**: additive, opt-in.
+7. **#11 `chore/m3-integration-docs`**: docs.
+8. **`feat/ui-shell` / `apps/studio`**: after it's pushed and reviewed.
+
+Use merge commits (not squash), in this order. After each merge, pull `main` and rerun the full offline suite.
 
 For each step, the integration lead builds the candidate in a separate worktree, runs Node plus the full offline Python suite with `FACTORY_API_KEY` unset, scans the diff for secrets, and confirms no processes are left running. Only then does it recommend the merge.
 
@@ -21,7 +25,7 @@ For each step, the integration lead builds the candidate in a separate worktree,
 | No orphans | `pgrep -fl <worktree>` must return nothing after the suites finish |
 | Scope | changed paths stay inside the owner's lane (`integration-risks.md`) |
 
-## 3. Third paid Droid run: go/no-go gate
+## 3. Third paid Droid run: go/no-go gate (PASSED: run 3 succeeded, 2026-10-24)
 
 ### GO only if **all** of these hold
 

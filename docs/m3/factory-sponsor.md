@@ -1,6 +1,6 @@
 # Factory Droid SDK: sponsor-track evidence
 
-Status as of 2026-10-24. Every claim is tagged **Verified** (checked against a primary source or our own code and runs), **Reported** (from a secondary source, not yet confirmed) or **Assumed**.
+Status as of 2026-10-24, after the successful third live run. Every claim is tagged **Verified** (checked against a primary source or our own code and runs), **Reported** (from a secondary source, not yet confirmed) or **Assumed**.
 
 ## 1. What the sponsor track asks for
 
@@ -18,24 +18,38 @@ Status as of 2026-10-24. Every claim is tagged **Verified** (checked against a p
 | Reported criterion | What Fork does | Status |
 |---|---|---|
 | Uses the official SDK | `engine/droid_adapter` uses `@factory/droid-sdk` **0.10.0** (`@factory/droid-sdk/node`), pinned via lockfile. Calls: `listModels`, `createSession`, `session.updateSettings`, `session.listTools`, `session.stream`, `session.close`, plus `permissionHandler` and `abortSignal`. | **Verified** in code (`src/adapter.ts`), with mocked tests |
-| Droid does real work inside the product | Users type a request in Fork's UI. Droid edits a *copy* of the running app in an isolated future, and Fork validates, boots and adopts the result as a new switchable timeline. Droid is part of the product's runtime, not a dev-time helper. | **Design verified**; end-to-end success **not yet verified** (see section 3) |
+| Droid does real work inside the product | Users type a request in Fork's UI. Droid edits a *copy* of the running app in an isolated future, and Fork validates, boots and adopts the result as a new switchable timeline. Droid is part of the product's runtime, not a dev-time helper. | **Verified live**: run 3 adopted a Droid-written future (see section 3) |
 | README explains Droid usage | `README.md` § "How the Factory Droid SDK powers AI-generated futures", plus `engine/droid_adapter/README.md` and `VERIFICATION.md` | **Verified** (main) |
-| Provenance | Every generation records the SDK `sessionId`, duration, summary, token usage and `factoryCredits`, the event log, the diff and the evaluation | **Verified**: two real sessions recorded (`c73bc85d…`, `58455bca…`) |
+| Provenance | Every generation records the SDK `sessionId`, duration, summary, token usage and `factoryCredits`, the event log, the diff and the evaluation | **Verified**: three real sessions recorded (`c73bc85d…`, `58455bca…`, `9314e994…`) |
 
-## 3. Live evidence so far
+## 3. Live evidence
 
 | Run | Model / mode | Outcome | Credits | Root cause |
 |---|---|---|---|---|
 | 1 (`bd3c06b0`) | gpt-6.1-sol / `script_only` | failed: guard, no changes | 5,222 | `Script` was disabled; in `script_only` mode that removes every tool |
 | 2 (`f98456d7`) | claude-sonnet-4-6 / `direct_only` | failed: guard, no changes | 133,563 | Under `AutonomyLevel.Off`, Edit/Create were `allowed:false`, which means *hidden from the model*. Droid read the code and wrote the change in prose. |
 
-Both runs prove real SDK sessions, streaming, tool calls (Read/LS/Grep), provenance capture and fail-closed validation. **Neither produced an adopted AI future.** A third run is gated on the criteria in `docs/m3/verification-plan.md` §3.
+| 3 (`1c98d768`) | claude-sonnet-4-6 / `direct_only`, Autonomy Off + `enabledToolIds: [Read, Edit, Create]`, macOS write sandbox | **succeeded** and adopted as timeline `e707847b` | 42,278 | n/a |
 
-## 4. Pitch-safe wording (until a successful live run)
+**Run 3 evidence** (built from `integration/m3` @ `6731c50`, the same code as PRs #10, #9, #12 and #13). The raw files are kept locally in `paradox-worktrees/m3-integration/.venv/droid-proof-3/`, which is git-ignored and never committed.
+- **Checks before the model turn:** model `claude-sonnet-4-6`, `direct_only`, autonomy `off`. After enabling: Read, Edit and Create all `allowed=true`.
+- **Tool calls:** 5× Read, 2× LS, 1× Edit, 1× Create. **The permission handler was called twice and approved both writes** (both inside `demo_app/`).
+- **Diff:** `demo_app/ranking.py` (+2/−2: `ORDERING = "popular"`, sorted by `(likes, created_at, id)` descending) and a new `demo_app/tests/test_popular_ranking.py` (+75, 7 tests).
+- **Validation:** agent, guard, compile, tests (26 passed, 0 failed), boot (295ms) and smoke all passed.
+- **Adoption:** timeline `e707847b`, `modification: "ai"`, `generation_id` linked.
+- **Isolation:** the child orders by popularity and the parent stays chronological. A parent write made after generation is absent from the child; a child-only write survives a revisit.
+- **Integrity:** the parent `ranking.py` hash is unchanged; repo tracked files are unchanged; no sandbox denials; no key-like strings in any evidence file.
+- **Session:** SDK session `9314e994`, 26.7s agent time, 1 HTTP generation request.
+
+Runs 1 and 2 are kept as an honest record. They show real SDK sessions and fail-closed validation, and their root causes are fixed in PR #13.
+
+## 4. Pitch-safe wording
 
 Safe: "Fork's AI futures are written by Factory Droid through the official TypeScript SDK. Each future records Droid's session, cost and diff, and only becomes a timeline after Fork independently compiles, tests and boots it."
 
-Not yet safe: "Droid generated this future live", unless the third run (or a demo-day run) succeeds, and "we are eligible for / will win the Factory prize".
+Now safe (run 3): "We generated a real future live with Factory Droid. It edited the code, Fork's own permission handler approved each write, and the result passed 26 tests and booted before becoming a timeline."
+
+Still not safe: "we are eligible for / will win the Factory prize" (the prize text is still only reported, see section 1), and claiming any *specific* on-stage run succeeded before it has.
 
 ## 5. Official SDK references checked
 

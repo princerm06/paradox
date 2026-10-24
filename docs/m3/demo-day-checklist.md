@@ -1,6 +1,6 @@
 # Cal Hacks demo-day checklist
 
-Two tracks. **Track S (scripted)** always works offline and is the default. **Track L (live Droid)** is used only if the third paid verification has passed (`verification-plan.md` §3–4), and only with the user's go-ahead on the day.
+Two tracks. **Track S (scripted)** always works offline and is the default. **Track L (live Droid)** is available: the third paid verification passed (generation `1c98d768`, 26 tests, adopted). Use it only with the user's go-ahead on the day, and budget about **42k Factory credits per run**.
 
 ## T-24h
 
@@ -30,12 +30,12 @@ Two tracks. **Track S (scripted)** always works offline and is the default. **Tr
 6. **A failed future.** Prompt: "break the app". It goes red at stage `compile`, no timeline is created, and the parent is unaffected.
 7. **Confirm** the good future and **decline** a spare one.
 
-## Track L (only if the third run passed and the user OKs it)
+## Track L (live Droid; only with the user's OK on the day)
 
 - [ ] Start the engine **from the terminal that has Keychain access**:
   `FACTORY_API_KEY="$(security find-generic-password -a "$USER" -s paradox-factory-api-key -w)" .venv/bin/python -m engine`
 - [ ] `curl -sS localhost:8000/api/agents` → droid `available: true`
-- [ ] Run **one** generation with `provider: "droid"` explicitly. Expect **several minutes**. Fill the time with steps 3–5 on an existing scripted future.
+- [ ] Run **one** generation with `provider: "droid"` explicitly. Run 3 took about 27s of agent time plus about 1 minute of validation; allow up to 6 minutes. Fill the time with steps 3–5 on an existing scripted future.
 - [ ] If it fails or runs past about 6 min, cancel and switch to Track S. Show the recorded real sessions instead (`docs/m3/factory-sponsor.md` §3).
 - [ ] After the demo, stop the keyed engine (Ctrl-C) so nothing else can spend credits
 
