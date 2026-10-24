@@ -10,11 +10,13 @@ import httpx
 
 
 class Runtime:
-    def __init__(self, root: Path, port: int = 8001):
+    def __init__(self, root: Path, port: int = 8001, environment=None, control=None):
         self.root = root
         self.port = port
         self.process = None
         self.log = None
+        self.environment = environment
+        self.control = control
 
     @property
     def running(self):
@@ -33,7 +35,7 @@ class Runtime:
             listener.bind(("127.0.0.1", self.port))
             listener.listen(128)
             self.port = listener.getsockname()[1]
-            environment = os.environ.copy()
+            environment = dict(self.environment) if self.environment is not None else os.environ.copy()
             environment.pop("PYTHONPATH", None)
             environment.update(
                 PARADOX_APP_DIR=str(self.root / "workspace" / "state"),
@@ -67,6 +69,8 @@ class Runtime:
             with httpx.Client(trust_env=False, timeout=0.5) as client:
                 deadline = time.monotonic() + 15
                 while time.monotonic() < deadline:
+                    if self.control:
+                        self.control.check()
                     if not self.running:
                         raise RuntimeError("Application exited; inspect runtime.log")
                     try:
