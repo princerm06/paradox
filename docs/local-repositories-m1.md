@@ -1,6 +1,7 @@
 # Local repositories: M1 implementation notes
 
-The architect-owned API contract is `docs/contracts/m1-projects.md`. This milestone
+The original API freeze is `docs/contracts/m1-projects.md`; the final user-approved
+persistence revision and exact examples are in `docs/m1-repositories-api.md`. This milestone
 adds registration, read-only Git inspection and static adapter validation only.
 It does **not** open an imported repository in the execution/timeline engine.
 Existing demo runtimes, state directories and timeline APIs remain independent.
@@ -27,7 +28,15 @@ The native shell must retain its token outside the page. Never put either token
 in logs, screenshots or committed configuration. CORS intentionally does not
 allow the shell-token header for browser requests.
 
-Repository IDs are random, in-memory and change when the engine is recreated.
+Repository IDs are random and persisted in the engine's own `repositories.json`.
+IDs, registration timestamps, source and the last successfully validated adapter
+configuration survive restart. Startup revalidates Git, permissions, paths and
+static compatibility without executing imported code. Missing/moved/invalid roots
+remain listed with their original IDs; inspect/validate fails safely until repaired
+or explicitly forgotten. Compatibility changes return `valid: false` on validation.
+Corrupt/unreadable/symlinked registry storage logs a code-only warning, lists no
+registrations and refuses registry mutations with 503 rather than overwriting it.
+This never prevents the original demo from starting.
 Duplicate roots return 409 with the existing ID. DELETE forgets registration only;
 it never removes repository files. Root/home, the engine checkout, engine state
 and descendants, relative/traversal paths and external Git-directory layouts are
@@ -54,8 +63,8 @@ Frontend error codes are:
 | 400 | `unsafe_path`, `invalid_path` |
 | 404 | `unknown_repository` |
 | 409 | `already_registered` (message includes existing ID) |
-| 422 | `unsupported_git_layout`, `unsafe_git_layout`, `unsafe_git_metadata`, `not_repository_root`, `invalid_repository`, `git_failed`, `git_timeout`, `repository_too_large`, `unsupported_filename`, `unsafe_tracked_path` |
-| 503 | `sandbox_unavailable` |
+| 422 | `unsupported_git_layout`, `unsafe_git_layout`, `unsafe_git_metadata`, `not_repository_root`, `invalid_repository`, `repository_unavailable`, `git_failed`, `git_timeout`, `repository_too_large`, `unsupported_filename`, `unsafe_tracked_path` |
+| 503 | `sandbox_unavailable`, `registry_unavailable` |
 
 Validation incompatibilities return HTTP 200 with `valid: false` and diagnostics;
 they never start or install an application. The architect-owned contract defines
@@ -102,10 +111,9 @@ as planning metadata and are **never run** by these endpoints. Future execution
 must supply a copied code directory, independent writable state, ephemeral
 loopback preview, scrubbed credentials, compile/test/health gates and rollback.
 
-Codex 1 owns `engine/project_analysis.py`; the API passes only Git-tracked paths
-to its pure static analyzer. Until that module is integrated, discovery returns
-`analysis_unavailable` and validation cannot succeed. No unsupported project is
-silently accepted. Static `valid: true` confirms configuration compatibility,
+Codex 1's `engine/project_analysis.py` is included in this backend branch; the API
+passes only Git-tracked paths to its pure static analyzer. There is no missing-module
+stub. No unsupported project is silently accepted. Static `valid: true` confirms configuration compatibility,
 not installed dependencies, actual health, tests passing or proven runtime state
 isolation. Every validation response includes this limitation as an info diagnostic.
 
@@ -113,6 +121,7 @@ isolation. Every validation response includes this limitation as an info diagnos
 
 ```sh
 env -u FACTORY_API_KEY python -m pytest -q tests/test_repositories.py
+env -u FACTORY_API_KEY python -m pytest -q tests/test_project_analysis.py tests/test_project_analysis_integration.py
 ```
 
 Tests create disposable repositories at runtime, never committed nested Git

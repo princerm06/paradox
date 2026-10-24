@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import types
 
 from fastapi.testclient import TestClient
 import pytest
@@ -12,6 +11,7 @@ from engine.api import create_app
 from engine import droid_sandbox
 from engine.repositories.git import Git, RepositoryError
 from engine.repositories.registry import Registry
+from engine.repositories.inspection import inspect as inspect_repository
 
 
 def git(root, *args):
@@ -48,7 +48,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
     monkeypatch.setenv("PARADOX_SHELL_TOKEN", "test-shell")
     monkeypatch.delenv("FACTORY_API_KEY", raising=False)
-    monkeypatch.setitem(sys.modules, "engine.project_analysis", types.SimpleNamespace(inspect_project=supported))
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", supported)
     with TestClient(create_app(state_dir=tmp_path / "engine", runtime_port=0)) as connection:
         yield connection
 
@@ -178,7 +178,7 @@ def test_unsupported_analysis_cannot_validate(client, repo, monkeypatch):
         result = supported(root, files)
         result.update(status="unsupported", adapter=None)
         return result
-    monkeypatch.setitem(sys.modules, "engine.project_analysis", types.SimpleNamespace(inspect_project=unsupported))
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", unsupported)
     repository_id = register(client, repo)
     response = client.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
     assert not response.json()["valid"]
@@ -190,7 +190,7 @@ def test_analysis_error_cannot_be_overridden_by_configuration(client, repo, monk
         result["status"] = "requires_configuration"
         result["diagnostics"] = [{"code": "fastapi_dependency_missing", "severity": "error", "message": "Missing dependency", "path": None}]
         return result
-    monkeypatch.setitem(sys.modules, "engine.project_analysis", types.SimpleNamespace(inspect_project=incomplete))
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", incomplete)
     repository_id = register(client, repo)
     response = client.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
     assert not response.json()["valid"]
@@ -269,3 +269,76 @@ def test_stale_configured_root_does_not_break_engine(tmp_path, monkeypatch, repo
         assert client.get("/api/timelines").status_code == 200
     assert "invalid_path" in caplog.text
     assert str(missing) not in caplog.text
+
+
+def test_failed_persistence_does_not_change_memory_or_disk(repo, tmp_path, monkeypatch):
+    registry = Registry([], tmp_path / "registry-state")
+    registry.start()
+    entry = registry.register(str(repo))
+    before = registry.store.path.read_bytes()
+    def deny_write(*arguments):
+        raise OSError("disposable write failure")
+    monkeypatch.setattr("engine.repositories.persistence.os.replace", deny_write)
+    with pytest.raises(RepositoryError) as error:
+        registry.forget(entry["id"])
+    assert error.value.status == 503
+    assert registry.listing() == [entry]
+    assert registry.store.path.read_bytes() == before
+    assert not list(registry.store.path.parent.glob(".repositories-*"))
+
+
+def test_forget_is_durable_and_registry_is_private(repo, tmp_path):
+    state = tmp_path / "registry-state"
+    registry = Registry([], state)
+    registry.start()
+    entry = registry.register(str(repo))
+    assert registry.store.path.stat().st_mode & 0o777 == 0o600
+    registry.forget(entry["id"])
+    restarted = Registry([], state)
+    restarted.start()
+    assert restarted.listing() == []
+
+
+@pytest.mark.parametrize("change", ["permissions", "symlink", "sandbox"])
+def test_restart_revalidates_unavailable_roots_without_forgetting(repo, tmp_path, monkeypatch, change):
+    state = tmp_path / "registry-state"
+    registry = Registry([], state)
+    registry.start()
+    entry = registry.register(str(repo))
+    original_mode = repo.stat().st_mode
+    moved = repo.with_name("moved")
+    if change == "permissions":
+        repo.chmod(0)
+    elif change == "symlink":
+        repo.rename(moved)
+        repo.symlink_to(moved, target_is_directory=True)
+    else:
+        monkeypatch.setattr(droid_sandbox, "availability_reason", lambda: "unavailable")
+    try:
+        restarted = Registry([], state)
+        restarted.start()
+        assert restarted.listing() == [entry]
+        with pytest.raises(RepositoryError):
+            inspect_repository(restarted, entry["id"])
+    finally:
+        if change == "permissions":
+            repo.chmod(original_mode)
+        elif change == "symlink":
+            repo.unlink()
+            moved.rename(repo)
+
+
+def test_symlink_registry_is_not_followed_or_overwritten(repo, tmp_path):
+    state = tmp_path / "registry-state"
+    state.mkdir()
+    outside = tmp_path / "private.json"
+    outside.write_text("private untouched content")
+    (state / "repositories.json").symlink_to(outside)
+    registry = Registry([], state)
+    registry.start()
+    assert registry.listing() == []
+    with pytest.raises(RepositoryError) as error:
+        registry.register(str(repo))
+    assert error.value.status == 503
+    assert outside.read_text() == "private untouched content"
+    assert (state / "repositories.json").is_symlink()

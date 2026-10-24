@@ -1,5 +1,6 @@
 from pathlib import Path, PurePosixPath
 
+from engine.project_analysis import inspect_project
 from engine.repositories.models import AdapterConfig
 
 
@@ -8,21 +9,12 @@ def diagnostic(code, message, severity="error", path=None):
 
 
 def analyze(root, files):
-    try:
-        from engine.project_analysis import inspect_project
-    except ModuleNotFoundError as error:
-        if error.name != "engine.project_analysis":
-            raise
-        return {"schema": "paradox.project-analysis/v1", "status": "unsupported", "adapter": None,
-                "runtime": {"language": None, "framework": None, "python_requires": None}, "dependencies": [],
-                "candidates": {"app": [], "tests": [], "health": [], "state": []},
-                "diagnostics": [diagnostic("analysis_unavailable", "Project analysis module is not integrated")]}
     return inspect_project(root, files)
 
 
 def inspect(registry, repository_id):
     repository = registry.get(repository_id)
-    root = Path(repository["root"])
+    root = registry.checked_root(repository_id)
     git, tracked = registry.git.inspect(root)
     top = {}
     for relative in tracked:
@@ -34,11 +26,14 @@ def inspect(registry, repository_id):
             "analysis": analyze(root, tracked)}
 
 
-def validate(registry, repository_id, supplied):
+def validate(registry, repository_id, supplied, persist=True):
     inspection = inspect(registry, repository_id)
     analysis = inspection["analysis"]
     candidates = analysis["candidates"]
     diagnostics = list(analysis["diagnostics"])
+    if supplied is None:
+        stored = registry.configuration(repository_id)
+        supplied = AdapterConfig.model_validate(stored) if stored else None
     if supplied is None and len(candidates["app"]) == len(candidates["tests"]) == len(candidates["health"]) == 1:
         supplied = AdapterConfig(adapter="fastapi-sqlite-v1", app=candidates["app"][0]["target"],
                                  tests=candidates["tests"][0]["path"], health_path=candidates["health"][0]["path"],
@@ -72,7 +67,10 @@ def validate(registry, repository_id, supplied):
     if inspection["git"]["dirty"]:
         diagnostics.append(diagnostic("dirty_working_tree", "Inspection includes current tracked working files, not only HEAD", "warning"))
     diagnostics.append(diagnostic("static_validation_only", "No commands executed; runtime, dependency and isolation checks remain required before execution", "info"))
-    return {"repository": inspection["repository"], "valid": not any(item["severity"] == "error" for item in diagnostics),
+    valid = not any(item["severity"] == "error" for item in diagnostics)
+    if valid and persist:
+        registry.save_configuration(repository_id, supplied.model_dump())
+    return {"repository": inspection["repository"], "valid": valid,
             "configuration": supplied.model_dump() if supplied else None, "diagnostics": diagnostics}
 
 

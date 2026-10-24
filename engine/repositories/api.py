@@ -1,8 +1,10 @@
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 from engine.repositories.git import RepositoryError
 from engine.repositories.inspection import inspect, validate
@@ -33,7 +35,12 @@ def repository_router(state_dir, roots=None):
         except RepositoryError as error:
             raise HTTPException(error.status, {"code": error.code, "message": str(error)}) from error
 
-    router = APIRouter(prefix="/api/repositories", tags=["repositories"], dependencies=[Depends(authorize)])
+    @asynccontextmanager
+    async def lifespan(application):
+        await run_in_threadpool(registry.start)
+        yield
+
+    router = APIRouter(prefix="/api/repositories", tags=["repositories"], dependencies=[Depends(authorize)], lifespan=lifespan)
 
     @router.get("")
     def listing():
