@@ -15,6 +15,8 @@ def scrubbed_environment(provider=None):
     environment = {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
     if provider == "droid" and os.environ.get("FACTORY_API_KEY"):
         environment["FACTORY_API_KEY"] = os.environ["FACTORY_API_KEY"]
+    if provider == "droid" and os.environ.get("PARADOX_DROID_MODEL"):
+        environment["PARADOX_DROID_MODEL"] = os.environ["PARADOX_DROID_MODEL"]
     if provider is None:
         environment.update(PYTHONDONTWRITEBYTECODE="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
     return environment

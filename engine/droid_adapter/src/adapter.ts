@@ -67,6 +67,7 @@ export const EXIT_INTERRUPTED = 130;
 
 const MAX_LOG_CHARS = 2000;
 const MAX_SUMMARY_CHARS = 8000;
+export const DEFAULT_MODEL_ID = 'claude-sonnet-4-6';
 
 // ---------------------------------------------------------------------------
 // Tool policy
@@ -318,7 +319,7 @@ export function parseInput(raw: string): AdapterInput {
 // ---------------------------------------------------------------------------
 
 export interface RunnerDeps {
-  createSession: (options: CreateSessionOptions) => Promise<Pick<DroidSession, 'id' | 'stream' | 'close'>>;
+  createSession: (options: CreateSessionOptions) => Promise<Pick<DroidSession, 'id' | 'settings' | 'listTools' | 'stream' | 'close'>>;
   /** SDK `AutonomyLevel.Off`; injected so tests need not load the SDK. */
   autonomyOff: CreateSessionOptions['autonomyLevel'];
   emit: (message: AdapterMessage) => void;
@@ -348,10 +349,11 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
   }
 
   const root = input.cwd;
-  let session: Pick<DroidSession, 'id' | 'stream' | 'close'> | null = null;
+  let session: Awaited<ReturnType<RunnerDeps['createSession']>> | null = null;
   try {
     session = await deps.createSession({
       cwd: root,
+      modelId: env.PARADOX_DROID_MODEL?.trim() || DEFAULT_MODEL_ID,
       autonomyLevel: deps.autonomyOff,
       disabledToolIds: [...DISABLED_TOOL_IDS],
       autoRejectPermissionRequests: false,
@@ -365,6 +367,17 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
       // No askUserHandler: the SDK declines AskUser requests without one.
     });
     log(`session started: ${session.id}`);
+    const mode = session.settings.toolExecutionMode;
+    log(`session model: ${session.settings.modelId}; tool execution mode: ${mode ?? 'unknown'}`);
+    if (mode !== 'direct_only') {
+      throw new Error('Droid session requires direct_only file tools; Script is intentionally disabled. Set PARADOX_DROID_MODEL to a direct-tool model.');
+    }
+    const tools = await session.listTools({ toolIds: ['Read', 'Create', 'Edit', 'ApplyPatch'] });
+    log(`file tool catalog: ${tools.map((tool) => `${tool.id} (allowed=${tool.allowed})`).join(', ')}`);
+    if (!tools.some((tool) => tool.id === 'Read' && tool.allowed) ||
+        !(tools.some((tool) => tool.id === 'ApplyPatch') || ['Create', 'Edit'].every((id) => tools.some((tool) => tool.id === id)))) {
+      throw new Error('Droid session has no usable direct file-tool catalog; refusing to spend a model turn without read/write tools.');
+    }
 
     for await (const message of session.stream(input.prompt, { abortSignal: deps.abortSignal })) {
       const record = message as unknown as Record<string, unknown>;

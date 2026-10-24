@@ -24,6 +24,7 @@ Configuration:
 - `PARADOX_TOKEN`: optional bearer token required on mutating `/api/*` requests.
 - `PARADOX_APP_URL`: public absolute iframe URL; default engine request origin.
 - `PARADOX_AGENT`: `droid` by default, or `scripted` for offline rehearsals.
+- `PARADOX_DROID_MODEL`: direct-tool SDK model, default `claude-sonnet-4-6`.
 - `PARADOX_SCRIPTED_RECIPES`: recipe directory, default `tests/fixtures/scripted_agent`.
 
 Set credentials privately in your local environment. Do not put keys or tokens in

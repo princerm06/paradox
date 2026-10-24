@@ -9,7 +9,7 @@ import pytest
 
 from engine.api import create_app
 from engine import providers
-from engine.jobs import JobControl
+from engine.jobs import JobControl, scrubbed_environment
 from engine.providers import Providers
 
 
@@ -184,6 +184,12 @@ def test_cancel_droid_is_terminal_and_preserves_parent(adapter, tmp_path):
 def test_unknown_provider_never_invokes_droid(tmp_path):
     with pytest.raises(ValueError, match="disabled agent provider"):
         Providers().run("claude", "popular", tmp_path, JobControl(), tmp_path / "agent.log")
+
+
+def test_droid_model_override_is_not_forwarded_to_validation(monkeypatch):
+    monkeypatch.setenv("PARADOX_DROID_MODEL", "claude-sonnet-4-6")
+    assert scrubbed_environment("droid")["PARADOX_DROID_MODEL"] == "claude-sonnet-4-6"
+    assert "PARADOX_DROID_MODEL" not in scrubbed_environment()
 
 
 def test_duplicate_results_are_rejected(adapter, tmp_path):

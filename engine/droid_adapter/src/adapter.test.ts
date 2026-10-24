@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -7,6 +7,7 @@ import { after, describe, it } from 'node:test';
 import {
   type AdapterMessage,
   DISABLED_TOOL_IDS,
+  DEFAULT_MODEL_ID,
   EXIT_BAD_INPUT,
   EXIT_INTERRUPTED,
   EXIT_OK,
@@ -144,6 +145,10 @@ function harness(streamMessages: Array<Record<string, unknown>>, options: { thro
       if (options.throwOnCreate) throw options.throwOnCreate;
       const session = {
         id: 'sess-1',
+        settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+        async listTools() {
+          return [{ id: 'Read', allowed: true }, { id: 'Create', allowed: false }, { id: 'Edit', allowed: false }];
+        },
         async *stream() {
           for (const message of streamMessages) yield message;
         },
@@ -165,6 +170,7 @@ describe('runAdapter', () => {
     await runAdapter(input, h.deps);
     const opts = h.captured.options!;
     assert.equal(opts.cwd, root);
+    assert.equal(opts.modelId, DEFAULT_MODEL_ID);
     assert.equal(opts.autonomyLevel, 'off');
     assert.equal(opts.autoRejectPermissionRequests, false);
     assert.equal(opts.askUserHandler, undefined);
@@ -257,6 +263,8 @@ describe('runAdapter', () => {
     h.deps.abortSignal = controller.signal;
     h.deps.createSession = async () => ({
       id: 'cancelled-session',
+      settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+      async listTools() { return [{ id: 'Read', allowed: true }, { id: 'ApplyPatch', allowed: false }]; },
       async *stream() {
         controller.abort();
         throw new Error('operation aborted');
@@ -277,6 +285,79 @@ describe('runAdapter', () => {
     assert.equal(h.captured.closed, true);
     assert.equal(h.emitted.filter((message) => message.type === 'result').length, 1);
     assert.equal((h.emitted.at(-1) as { summary: string }).summary, 'Droid stream ended without a result');
+  });
+
+  it('rejects the saved script-only failure before spending a model turn', async () => {
+    const h = harness([]);
+    let streamed = false;
+    h.deps.env!.PARADOX_DROID_MODEL = 'gpt-6.1-sol';
+    h.deps.createSession = async (options) => {
+      h.captured.options = options;
+      return {
+        id: 'script-only-session',
+        settings: { modelId: 'gpt-6.1-sol', toolExecutionMode: 'script_only' },
+        async listTools() { throw new Error('must reject mode first'); },
+        async *stream() { streamed = true; },
+        async close() { h.captured.closed = true; },
+      } as unknown as FakeSession;
+    };
+    assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
+    assert.equal(h.captured.options!.modelId, 'gpt-6.1-sol');
+    assert.ok(h.captured.options!.disabledToolIds!.includes('Script'));
+    assert.equal(streamed, false);
+    assert.equal(h.captured.closed, true);
+    assert.match((h.emitted.at(-1) as { summary: string }).summary, /direct_only/);
+  });
+
+  it('rejects an empty file-tool catalog before streaming', async () => {
+    const h = harness([]);
+    let streamed = false;
+    h.deps.createSession = async () => ({
+      id: 'no-tools-session',
+      settings: { modelId: DEFAULT_MODEL_ID, toolExecutionMode: 'direct_only' },
+      async listTools() { return []; },
+      async *stream() { streamed = true; },
+      async close() { h.captured.closed = true; },
+    } as unknown as FakeSession);
+    assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
+    assert.equal(streamed, false);
+    assert.equal(h.captured.closed, true);
+    assert.match((h.emitted.at(-1) as { summary: string }).summary, /file-tool catalog/);
+  });
+
+  it('keeps direct writes approval-gated with Off instead of enabling Script', async () => {
+    const h = harness([{ type: 'result', success: true, sessionId: 'sess-1', text: 'edited' }]);
+    assert.equal(await runAdapter(input, h.deps), EXIT_OK);
+    const options = h.captured.options!;
+    assert.equal(options.autonomyLevel, 'off');
+    assert.ok(options.disabledToolIds!.includes('Script'));
+    assert.ok(options.disabledToolIds!.includes('Execute'));
+    assert.ok(!options.disabledToolIds!.includes('Read'));
+    assert.ok(!options.disabledToolIds!.includes('Create'));
+    assert.ok(!options.disabledToolIds!.includes('Edit'));
+    assert.equal(await options.permissionHandler!(request({ details: { type: 'create', filePath: 'demo_app/new.py' } }) as never), 'proceed_once');
+  });
+
+  it('allows a mocked SDK direct-file edit through the permission handler with Off', async () => {
+    const h = harness([]);
+    const target = path.join(root, 'demo_app', 'mock_generated.py');
+    h.deps.createSession = async (options) => ({
+      id: 'direct-edit-session',
+      settings: { modelId: options.modelId, toolExecutionMode: 'direct_only' },
+      async listTools() { return [{ id: 'Read', allowed: true }, { id: 'Create', allowed: false }, { id: 'Edit', allowed: false }]; },
+      async *stream() {
+        assert.equal(options.autonomyLevel, 'off');
+        assert.equal(await options.permissionHandler!(request({ details: { type: 'create', filePath: target } }) as never), 'proceed_once');
+        writeFileSync(target, 'ORDERING = "popular"\n');
+        yield { type: 'result', success: true, sessionId: 'direct-edit-session', text: 'mock edit applied' };
+      },
+      async close() { h.captured.closed = true; },
+    } as unknown as FakeSession);
+    assert.equal(await runAdapter(input, h.deps), EXIT_OK);
+    assert.equal(readFileSync(target, 'utf8'), 'ORDERING = "popular"\n');
+    assert.equal(h.captured.closed, true);
+    assert.ok(h.emitted.some((message) => message.type === 'log' && message.message.includes('permission proceed_once')));
+    rmSync(target);
   });
 });
 

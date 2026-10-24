@@ -132,6 +132,19 @@ Anything else is answered with `cancel`. That includes `exec`, `script`,
 `mcp_tool`, `sandbox_violation`, `droid_shield_violation`, `ask_user`, mission
 requests, and unknown types. Each decision is logged.
 
+## Model and tool surface
+
+The adapter explicitly selects `claude-sonnet-4-6` by default; set
+`PARADOX_DROID_MODEL` to select another model with a **direct file-tool** surface.
+It does not inherit an arbitrary CLI model default. Before `session.stream`, it
+checks `session.settings.toolExecutionMode === 'direct_only'` and inspects
+`session.listTools` for Read and Create/Edit or ApplyPatch. Script-only sessions
+fail with a clear configuration error before streaming: allowing Script would
+bypass the adapter's file-only permission policy. `AutonomyLevel.Off` remains
+enabled; direct edit/create permission requests still receive `proceed_once`
+only for valid paths. The tool catalog's edit `allowed: false` can mean
+approval is required, not that the edit tool is absent.
+
 ## Known limitations
 
 - **Mocked tests are not live-generation proof.** For exact official SDK

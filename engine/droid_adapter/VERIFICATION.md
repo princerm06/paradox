@@ -16,6 +16,10 @@ The production call chain is:
 3. `src/adapter.ts` dynamically imports **`@factory/droid-sdk/node`**, then calls
    **`createSession`** with `cwd`, **`AutonomyLevel.Off`**, **`disabledToolIds`**,
    **`permissionHandler`**, **`abortSignal`**, and disabled built-in skills.
+   It explicitly selects `modelId` (default `claude-sonnet-4-6`, override
+   `PARADOX_DROID_MODEL`), checks the session's `toolExecutionMode`, and calls
+   **`session.listTools`** before streaming. Script-only/missing-file-tool
+   sessions fail closed rather than paying for a tool-less model response.
 4. It iterates **`session.stream(prompt, {abortSignal})`**. SDK messages become
    JSONL logs; the final result maps **`sessionId`**, **`tokenUsage.inputTokens`**,
    **`outputTokens`**, and **`factoryCredits`** into the Python result. It calls
@@ -40,6 +44,9 @@ missing-key check with a placeholder or claim that a CLI installation proves
 SDK authentication.
 
 ## Reproduce one real generation
+
+**Do not repeat the paid command below without fresh user approval.** The one
+authorized run failed; the subsequent investigation and fixes are offline.
 
 Install Python dependencies, Node 20+, the Factory CLI, and securely configure
 `FACTORY_API_KEY` in the invoking environment. Never paste it into a command,
@@ -127,25 +134,24 @@ credentials or raw private session data. At the prerequisite check:
 }
 ```
 
-No credential was present in this execution environment or its interactive
-shell. The prerequisite verifier therefore **sent no generation POST**; no
-paid call, real SDK session, generated future, or authenticated success is
-claimed for this audit until the one-shot command runs with secure credential
-injection. A reported earlier passing live test is separate evidence, not
-substituted for the missing run.
+Initially no credential was present in this execution environment or its
+interactive shell. The prerequisite verifier sent no generation POST. A later
+user-authorized, privately configured run created the real session below; it
+did **not** create a working future. No second paid run was made during the
+investigation.
 
 Offline checks:
 
-- `pytest tests/test_droid_provider.py -q`: **23 passed**. Includes precise
+- `tests/test_droid_provider.py`: **24 cases pass** in the full suite. Includes precise
   availability errors, default/explicit Droid refusing fallback, SDK failure
   detail/redaction, malformed/duplicate results, timeout, cancellation, and
   the full verifier traversal using a deliberately fake adapter.
 - `pytest tests/test_generations.py tests/test_droid_provider.py -q`:
-  **44 passed** in 35.50 seconds.
-- `npm --prefix engine/droid_adapter test`: **19 passed** with injected SDK
+  **45 passed** in 34.96 seconds.
+- `npm --prefix engine/droid_adapter test`: **23 passed** with injected SDK
   mocks, including abort/close and stream-without-result failures.
-- `env -u FACTORY_API_KEY .venv/bin/python -m pytest -q`: **132 passed,
-  1 skipped** in 205.32 seconds. The live acceptance test is deliberately
+- `env -u FACTORY_API_KEY .venv/bin/python -m pytest -q`: **133 passed,
+  1 skipped** in 204.17 seconds. The live acceptance test is deliberately
   skipped by unsetting the key, preventing accidental extra paid requests.
 
 These tests prove local behavior, not Factory authentication or agent quality.
@@ -154,3 +160,87 @@ Environment inspected: Python 3.9.6, Node 24.22.1, Factory CLI 0.249.0,
 official SDK 0.10.0. The SDK import/CLI probe succeeded without a network call.
 Dependency audit reported one moderate and two high advisories (SDK/transitive
 uuid/zod); no forced SDK downgrade or dependency rewrite was performed.
+
+## Paid-run failure and offline fix
+
+- Generation: `bd3c06b0-c092-4724-8fc0-e07def78261a`.
+- Official SDK session: `c73bc85d-918f-4f68-bcaa-ae2a69d62f0c`.
+- Saved HTTP proof: `.venv/droid-proof-1/http-evidence.json`.
+- Result: SDK exit 0, followed by generation `failed`, stage `guard`,
+  `Agent made no code changes`; diff/files empty, no timeline adopted.
+- Observed HTTP statuses: queued, preparing, generating, failed. Validating
+  was transient and was not observed by polling; the stored evaluation includes
+  the passed agent check and failed guard check.
+
+The real agent explicitly said it had no file-reading/editing tools and made
+no changes. `agent.log` has session-start, assistant, and result records, but
+**zero tool calls, tool results, or permission decisions**. The persisted
+Factory session JSONL likewise has no tool calls. There is no evidence of the
+permission handler blocking a requested write: it was never called.
+An independent SHA-256 comparison found all 12 base/future source files
+identical. The unchanged `demo_app/ranking.py` hash is
+`705db40a9de900fa28c27bb1d393857d18c1659221b4d549811f98ac0e7f8936`.
+Adapter output contains two log records and one result; timeline association
+is null. These checks corroborate the guard rather than weakening it.
+
+The persisted session settings identify the mismatch:
+
+```json
+{
+  "model": "gpt-6.1-sol",
+  "toolExecutionMode": "script_only",
+  "toolExecutionModeModelId": "gpt-6.1-sol",
+  "autonomyLevel": "off"
+}
+```
+
+The adapter disabled `Script` and `WaitForScript`, intentionally, along with
+`Execute`. In a `script_only` session, native tools are reached through Script;
+removing that bridge leaves the model unable to call file tools. The installed
+SDK defines `ToolExecutionMode` as controlling direct versus Script-only tool
+exposure. The saved session's system reminder also instructs the agent to load
+tools through Script. This is an **adapter configuration incompatibility**, not
+a wrong directory, broken SDK transport, fabricated no-edit result, or
+insufficiently explicit prompt.
+
+The saved `cwd` is exactly the generation's isolated
+`generations/<id>/workspace/code`, not the parent workspace or repository.
+Its saved user prompt contains `Read demo_app/AGENTS.md first`, `Change only
+demo_app/`, `Add a test`, and the exact requested popularity prompt. Changing
+the prompt would not restore missing tool schemas. Raising autonomy or
+allowing arbitrary Script/Execute would weaken the intended boundary and is
+not the chosen fix.
+
+The minimal supported configuration fix selects an explicit direct-file-tool
+model via the official SDK `modelId`, defaulting to `claude-sonnet-4-6`. The
+optional `PARADOX_DROID_MODEL` is forwarded only to the SDK subprocess, not
+validation. The installed SDK 0.10.0 `createSession` and `updateSettings` do not
+offer a public `toolExecutionMode` override; no unsupported field or private
+wire workaround was added. The adapter now logs model/mode and file-tool
+catalog metadata, and rejects script-only/unknown modes or missing read/write
+tools **before `session.stream`**. It never enables Script or shell execution
+and never silently switches models after a failure.
+
+`AutonomyLevel.Off` is retained. With direct tools, writes can ask the existing
+permission handler for `proceed_once`. A catalog edit entry marked
+`allowed: false` may indicate required approval; the preflight deliberately
+does not equate that with an absent editing tool. A mocked SDK regression
+performs a real temporary-file write only after that handler approves it.
+
+Offline local CLI catalog checks used `droid exec --list-tools --model ...`
+under macOS `sandbox-exec` with **all network denied**. Sonnet's catalog includes
+Read/Create/Edit; GPT's includes Read/ApplyPatch. This is catalog inspection,
+not a model turn or authenticated end-to-end proof. The saved `script_only`
+setting explains why catalog entries alone were insufficient in the failed
+session; the new preflight checks both mode and catalog.
+
+Regression coverage reproduces the exact script-only configuration, asserts
+`stream` is never called for it or an empty catalog, checks explicit model
+selection/override, and proves mocked direct writes still work with Off while
+Script/Execute remain disabled. The real-change guard is unchanged. The four
+new SDK regression cases bring the Node suite to **23 passed**.
+
+A second user-approved run is necessary to claim a successful real Factory
+generation after the fix, not to diagnose this failure or review the offline
+regressions. Model availability/account policy and actual CLI permission
+behavior still need that end-to-end confirmation. **Wait for approval.**
