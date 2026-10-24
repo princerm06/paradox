@@ -126,7 +126,13 @@ def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runti
 
     @application.middleware("http")
     async def authenticate(request, call_next):
-        if token and request.url.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        mutating = request.url.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        # Browsers attach Origin to every cross-origin POST, including bodyless ones that skip
+        # CORS preflight. Refuse engine mutations from any page outside the allowlist, even
+        # without a token; non-browser clients (CLI, tests) send no Origin and are unaffected.
+        if mutating and "origin" in request.headers and request.headers["origin"] not in origins:
+            return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
+        if token and mutating:
             if not secrets.compare_digest(request.headers.get("authorization", "").encode(), ("Bearer " + token).encode()):
                 return JSONResponse(status_code=401, content={"detail": "Missing or invalid token"})
         return await call_next(request)
