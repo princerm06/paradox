@@ -16,8 +16,8 @@ Two tracks. **Track S (scripted)** always works offline and is the default. **Tr
 ## T-1h: rehearsal (Track S)
 
 - [ ] `python scripts/demo_rehearsal.py` → **PASS** (exercises create, switch, isolation, diff, confirm, decline, a failing recipe and cancel)
-- [ ] `python scripts/demo_rehearsal.py --keep-running`. Note the printed state dir and app URL, then open the studio against it.
-- [ ] The engine is started with `PARADOX_AGENT=scripted` (even when the key exists), so no stray request can spend credits
+- [ ] **Don't use `scripts/demo_rehearsal.py --keep-running` for the human demo.** The script builds its engine environment from `PATH` and `HOME` only, so that engine runs **without `PARADOX_TOKEN`**. Use the script only as the automated pre-flight check above. Start the presenter engine with the token block in *T-1h: studio setup* below.
+- [ ] **Credit safety comes from the missing key, not from `PARADOX_AGENT`.** `PARADOX_AGENT=scripted` only sets the *default* provider. If `FACTORY_API_KEY` is present, an explicit `provider: "droid"` request still runs. For Track S, the engine terminal must not have the key (`env -u FACTORY_API_KEY`), and `/api/agents` must show droid `available: false`.
 - [ ] The browser is zoomed for the projector, with notifications off
 
 ## T-1h: studio setup (Track S, scripted only)
@@ -105,7 +105,7 @@ This procedure was verified on 2026-10-24 with a production build: zero mutating
 
 ## Reset between runs
 
-- Stop the engine (Ctrl-C). Rerun `scripts/demo_rehearsal.py --keep-running` for a fresh state dir. Never reuse a state dir after a failed live run.
+- Stop the engine (Ctrl-C). For a fresh state dir, rerun the engine block in *T-1h: studio setup*: new `PARADOX_TOKEN`, new `PARADOX_STATE_DIR`, `env -u FACTORY_API_KEY`. Then paste the new token into Settings → Engine token and repeat the unauthorized-POST check. Never reuse a state dir after a failed live run.
 
 ## If something breaks
 
