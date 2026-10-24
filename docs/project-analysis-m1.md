@@ -71,6 +71,11 @@ from tracked `tests/` paths and pytest filename conventions. Test code is not
 treated as a runtime application. Dynamic entrypoints, cross-module factories,
 routers with dynamic prefixes, complex custom startup, and newer Python syntax
 may require manual configuration rather than guessing.
+Module targets are relative to the repository root: a src-layout app is reported
+as `src.pkg.main:app`. The configuration validator must explicitly map its
+working directory and entrypoint rather than assuming a `src` import root.
+Routes declared on `APIRouter` or attached using `include_router` are not
+resolved, even with literal prefixes; they require manual health configuration.
 
 Dependency declarations are recognized in `requirements*.txt`, PEP 621
 `[project].dependencies`, Poetry dependencies, `setup.cfg`, and Pipfile packages.
@@ -100,6 +105,9 @@ review before any future execution. A static match cannot prove isolation.
   Even in-root symlinks are rejected. This POSIX read strategy is tested on macOS.
 - Only regular files are read; nonblocking opens reject FIFOs without hanging.
 - Limits: 4,096 supplied tracked paths, 256 KiB per file, 4 MiB total contents.
+  The path-count cap applies before source filtering, so asset-heavy repositories
+  exceeding it are conservatively incomplete even with few Python files. A
+  future separate raw-list and relevant-source cap can relax this limitation.
   Oversized files are rejected from stat metadata before reading their payload.
   Actual read bytes consume the shared budget even if a file changes mid-read.
 - Per-file analysis also caps 50,000 AST nodes and 10,000 state-flow operations;
@@ -128,3 +136,9 @@ env -u FACTORY_API_KEY .venv/bin/python -m pytest tests/test_project_analysis.py
 
 Focused result: **38 passed**. No Factory call, credential access,
 dependency install or imported-project execution is part of these checks.
+Any warning or error conservatively prevents `supported`, including dependency
+indirection, decoding replacement and external-state evidence.
+
+Final full offline regression with `FACTORY_API_KEY` unset:
+`env -u FACTORY_API_KEY .venv/bin/python -m pytest -q` — **260 passed,
+2 skipped in 330.89s**. This covers the final analyzer complexity hardening.
