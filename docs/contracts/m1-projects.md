@@ -1,11 +1,12 @@
 # M1 contract: local projects (read-only)
 
-Status: **frozen v1** (2026-10-24). Changes need agreement from Claude (integration), Codex 1 (analysis) and Codex 2 (repositories). Studio work follows this document.
+Status: **frozen v1.1** (2026-10-24). Changes need agreement from Claude (integration), Codex 1 (analysis) and Codex 2 (repositories). Studio work follows this document.
+
+v1.1 (user request): registrations and successful configurations persist across restarts in `<state>/repositories.json`. Ids are stable. Unavailable roots stay listed. `validate {}` re-checks the saved configuration. Exact behaviour is in Codex 2's `docs/m1-repositories-api.md`, which takes precedence on persistence. Routes and schemas are unchanged.
 
 M1 scope is **read-only discovery** of local Git repositories. Paradox can register a repository, inspect it and say whether it fits the one supported adapter. M1 does not cover:
 - generation on imported repositories
 - copying, importing or adoption into timelines
-- persistence of registrations
 - OAuth, remote pushes or pull requests
 
 ## Ownership
