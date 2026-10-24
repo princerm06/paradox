@@ -218,6 +218,9 @@ test("3. persistence across a clean quit and relaunch; new token, old one reject
   await page.goto("/");
   await expect(page.getByText("Live · Original")).toBeVisible();
   await expect(page.locator(".future-node .future-select", { hasText: "Add a popular ranking" })).toHaveCount(1);
+  // After relaunch the runtime and provider list come back: the portal renders the app and the agent chip is ready.
+  await expect(page.frameLocator("iframe[title='Live application']").getByText(/Ordering: chronological/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".chip-select .dot.ok")).toHaveCount(1, { timeout: 15_000 });
   await shot(page, "d08-after-relaunch");
 });
 
