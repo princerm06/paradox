@@ -1,10 +1,17 @@
 # M2-B step 2: static adapter and execution sandbox
 
-This delivery implements the frozen Project Adapter v1 hooks from
+This document retains the step-2 implementation and review history. Current M2
+readiness is **GO for approved single-process disposable/scripted fixtures**:
+485 passed / 4 skipped / 1 deliberately deselected, with no expected failures.
+See `docs/m2-projects-api.md` for the final combined gate, the user-approved
+single-process addendum and remaining limitations.
+
+The original step-2 delivery implemented the frozen Project Adapter v1 hooks from
 `docs/contracts/m2-projects.md` at `69a8123`, on top of approved demo-neutral
-profile refactor `f4fa14e`. It does **not** enable imported-project runtimes,
-add project/trust routes, or execute a registered repository. Runtime's existing
-non-demo refusal remains in place. The next delivery requires architect review.
+profile refactor `f4fa14e`. That step did **not** enable imported-project runtimes,
+add project/trust routes, or execute a registered repository. Runtime's non-demo
+refusal remained in place at that historical review gate; subsequent authorized
+step-3 integration supplies the sandboxed Runtime and project lifecycle.
 
 ## Boundaries
 
@@ -125,15 +132,15 @@ return `dependency_unavailable`; project module/package collisions return
 `dependency_shadowed`. Initialization creates only empty isolated state; it never
 seeds or copies a source repository's local database.
 
-## Review gate and remaining work
+## Historical step-2 review gate
 
 Direct sandbox fixtures exercise compileall, legitimate pytest and uvicorn,
 SQLite writes, exact-file reports, blocked home/sibling reads, source writes,
 symlink escapes, shell exec, external sockets and parent environment inspection.
 These are disposable helper tests, not imported-project Runtime activation.
 
-Step 2 is ready for sandbox review only, **not** an imported-project execution GO.
-Pending gates: runtime credential fix merged/approved for integration, architect
+Step 2 was ready for sandbox review only, **not** an imported-project execution GO.
+Its pending gates were: runtime credential fix merged/approved for integration, architect
 sandbox review, project trust/import lifecycle, complete Runtime wrapping,
 generation integration, restart/cancellation and cross-future isolation tests.
 This is a macOS-only sandbox, not a VM or a proof against every kernel/native

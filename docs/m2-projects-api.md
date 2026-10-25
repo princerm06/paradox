@@ -4,7 +4,7 @@ Implementation branch: `feat/project-runtime-lifecycle`. Frozen interface:
 `docs/contracts/m2-projects.md`. M1 registration/validation remains documented in
 `docs/m1-repositories-api.md`. No UI or imported-source edits are required.
 
-## Readiness: final security gates pending
+## Readiness: GO for approved single-process scripted fixtures
 
 The user approved a single supervised imported process on October 24, 2026.
 This explicit compatibility/security addendum supersedes the frozen contract's
@@ -20,7 +20,10 @@ the engine-liveness pipe. See `docs/m2-runtime-lifecycle.md` for the implementat
 The prior detached-child P1 was reproduced on 47fc00b and is historical evidence,
 not a passing security gate. Its strict expected failure has been removed in favor
 of enforced spawn rejection and adversarial re-exec cleanup tests. Final readiness
-requires the new focused and full offline tests; no merge is authorized by GO.
+requires the new focused and full offline tests. Both are now green, including
+independent review. GO is limited to the user-approved disposable-repository,
+scripted, single-process scope; no merge or real-user-repository execution is
+authorized by this verdict. No known P0/P1 remains in that tested scope.
 
 ## Authentication and approval
 
@@ -185,7 +188,7 @@ code-only `uncommitted_changes_ignored` warning record that choice.
 
 | Project/layout | Status |
 |---|---|
-| Single-process FastAPI + engine-installed static dependencies + env-isolated SQLite | Implemented, disposable scripted testing only; final security gates pending |
+| Single-process FastAPI + engine-installed static dependencies + env-isolated SQLite | GO for approved disposable/scripted testing |
 | Bundled demo | Existing `trusted_local` behavior preserved |
 | Missing trust/config/dependencies/sandbox | Fail closed; no imported boot |
 | Alternate frameworks, package installation, shell commands, external state | Unsupported |
@@ -226,3 +229,67 @@ the interpreter, ignore TERM, reject session/group escape, and verify the writer
 has stopped. The pre-fix full run was intentionally interrupted at 235 passed / 4
 skipped / 1 deselected; **it is not a final full-suite result**. Final regression
 must run with both supervision changes integrated.
+
+## Final combined offline gate
+
+Tested source: `3c3a78324cccaf6c948724424e499085e3020a20`, containing both lanes by
+history, the single-process restriction (`f8fdf67`), session-leading JobControl
+supervision (`291f97b`) and Codex 1's real SQLite/timeline adversarial tests.
+The full offline run passes **485 passed, 4 skipped, 1 deselected in 674.97s**.
+There are **zero failures and zero expected failures**. The detached trusted test
+runner records return code 0 and the exact source SHA; it does not execute
+imported code outside the application sandbox.
+
+```text
+python -m pytest -q -rsx --junitxml=/tmp/paradox-m2b-final-durable-junit.xml \
+  -k 'not test_live_droid_generation_records_a_complete_result'
+```
+
+The runner uses an allowlisted environment (PATH, HOME, TMPDIR, LANG, LC_ALL,
+`PARADOX_AGENT=scripted`, `PYTHONDONTWRITEBYTECODE=1`), with no provider credentials,
+bearer/shell tokens or configured repository roots. Tests install dummy sentinels
+where needed. The four skips are exactly:
+
+- `tests/e2e/test_long_generation.py:13`: opt-in four-minute scripted rehearsal.
+- `tests/test_droid_sandbox.py:69`: built Node adapter required.
+- `tests/test_droid_sandbox.py:177`: built official SDK adapter and CLI required
+  for its metadata-only probe.
+- `tests/test_droid_sandbox.py:204`: built Node adapter required.
+
+The sole deselection is the paid/live Droid generation test; it was deliberately
+excluded. No paid calls were made and existing Factory evidence was not modified.
+
+Codex 1 independently reports **102 distinct focused passes** on the same combined
+source: 62 sandbox/launcher/runtime/hostile timeline/real-SQLite tests (88.08s), plus
+40 profile/provider/guard/real-validation-worker tests (28.52s). The added source
+SQLite fixture is a real database, queried through an immutable read-only URI;
+its sentinel row and all source/Git file hashes and mtimes remain unchanged after
+generation, activation, managed-state writes and reopen. The hostile outgoing
+writer's exact PID is reaped before timeline activation or snapshot restore;
+restored state remains free of its marker and the parent's late SQLite write.
+
+Remaining compatibility/security limits are intentional: macOS sandbox-exec only;
+no workers, reloaders, subprocess-based tests, dependency installation, external
+state or paid providers for imported projects. This is not a VM, a CPU/RAM quota,
+or isolation from other unauthenticated localhost services. The bundled
+`trusted_local` demo is still not a hostile-code security boundary. Desktop/UI
+artifacts and original repositories were not modified, and no push/main merge
+forms part of this gate.
+
+## Final adversarial smoke checklist
+
+- Without bearer authentication, repository/project reads fail with 401; foreign
+  mutation Origins and missing native shell approval fail with 403.
+- Inspect/validate a dirty disposable repository without execution. Source files,
+  Git metadata and the real source SQLite sentinel must remain byte/mtime-identical.
+- Explicitly trust/import/open; generate only with `scripted`. Check logs/diff,
+  parent association, failed/cancelled publication guards and keyless usage.
+- Activate a generated future and write isolated SQLite data; switch back and
+  restore a snapshot. No late parent write or outgoing writer may cross over.
+- Close/reopen and restart the engine: IDs, active future and managed state must
+  persist; imported runtimes must remain stopped until explicitly opened.
+- Revoke trust during a run: generation stops, runtime/state writer is terminated,
+  and execution requires fresh approval. The bundled demo must stay healthy.
+- Worker/subprocess fixture import must fail clearly. Fork/spawn, shell/Mach/DNS,
+  engine credentials/process information, home reads and source writes stay denied;
+  a re-execing TERM-resistant single process must not survive transition or timeout.

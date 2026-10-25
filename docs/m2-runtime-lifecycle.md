@@ -51,7 +51,12 @@ worker-rejection tests. Additional real HTTP cases attempt detached spawn before
 re-execing a TERM-resistant state writer, then close, switch projects or revoke
 trust. Crash, boot cancellation and unhealthy-start timeout tests also verify the
 application dies and runtime temporary data is removed. Final counts and the
-release decision are recorded in `docs/m2-projects-api.md` after the final gates.
+release decision are recorded in `docs/m2-projects-api.md`. The final combined
+offline gate passes 485 tests with four prerequisite/opt-in skips and one
+deliberately excluded live/paid test, with no expected failures. Independent
+combined review passes 102 distinct focused tests. This is a GO for the approved
+single-process disposable/scripted scope, not authorization for broader execution
+or a merge.
 
 ## Validation supervision
 
