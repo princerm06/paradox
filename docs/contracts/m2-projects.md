@@ -261,7 +261,7 @@ class Projects:                                               # one per app, own
     def revoke(self, repository_id) -> None                   # close runtime, cancel generations, status unavailable
 ```
 
-Mirrored routes reuse the existing handler bodies with the project's `(Engine, Generations)` instead of the app-level pair. Project state lives in `<state>/projects/<pid>/` with its own `engine.lock`-free sub-tree. The app-level engine lock covers it, and each project `Engine` has its own `Gate`.
+Mirrored routes reuse the existing handler bodies with the project's `(Engine, Generations)` instead of the app-level pair. Project state lives in `<state>/projects/<pid>/`. Each project `Engine` has its own `engine.lock`, `Gate`, `engine.sqlite3`, snapshots and generations, and never touches the demo's files. `Engine.start()` initializes the Original timeline from the import staging copy plus `ADAPTER.initialize_state`, not from `demo_source`.
 
 ## Disposable fixture project
 
