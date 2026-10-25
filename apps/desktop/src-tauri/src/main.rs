@@ -13,7 +13,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -22,8 +22,9 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 const ENGINE_PORT: u16 = 8100;
 const UI_PORT: u16 = 5190;
-/// Dev-machine POC: the engine runs from this checkout's own virtualenv.
-const REPO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
+/// The engine ships inside the app: Contents/Resources/engine/{python,paradox}.
+/// Nothing refers to the source checkout it was built from.
+const ENGINE_DIR: &str = "engine";
 
 /// Exits (status 3) when the shell's end of stdin closes, i.e. if the shell
 /// dies without a clean shutdown; the engine's own children die with it.
@@ -67,21 +68,22 @@ fn fail(message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn start_engine(repo: &Path, data: &Path, token: &str) -> std::io::Result<Child> {
-    let python = std::env::var_os("PARADOX_DESKTOP_PYTHON").map(PathBuf::from).unwrap_or_else(|| repo.join(".venv/bin/python"));
+fn start_engine(bundle: &Path, data: &Path, token: &str) -> std::io::Result<Child> {
+    let python = bundle.join("python/bin/python3.9");
+    let repo = bundle.join("paradox");
     let state = data.join("state");
     fs::create_dir_all(&state)?;
     let log = File::create(data.join("engine.log"))?;
     let origins = format!("http://localhost:{UI_PORT},http://127.0.0.1:{UI_PORT}");
     Command::new(python)
         .args(["-I", "-c", LAUNCHER])
-        .current_dir(repo)
+        .current_dir(&repo)
         // A clean environment: no FACTORY_API_KEY or anything else inherited from the user's shell.
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .env("HOME", std::env::var_os("HOME").unwrap_or_default())
         .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("PARADOX_DESKTOP_REPO", repo)
+        .env("PARADOX_DESKTOP_REPO", &repo)
         .env("PARADOX_DESKTOP_PORT", ENGINE_PORT.to_string())
         .env("PARADOX_STATE_DIR", &state)
         .env("PARADOX_AGENT", "scripted")
@@ -152,14 +154,21 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_localhost::Builder::new(UI_PORT).build())
         .setup(|app| {
-            let repo = fs::canonicalize(REPO).unwrap_or_else(|_| fail("the repository checkout was not found"));
+            let bundle = app
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|resources| resources.join(ENGINE_DIR))
+                .and_then(|dir| fs::canonicalize(dir).ok())
+                .filter(|dir| dir.join("python/bin/python3.9").is_file() && dir.join("paradox/engine/api.py").is_file())
+                .unwrap_or_else(|| fail("the bundled engine is missing from the app; reinstall Paradox"));
             if !port_free(ENGINE_PORT) {
                 fail(&format!("port {ENGINE_PORT} is already in use; another Paradox desktop engine may still be running"));
             }
             let data = app.path().app_data_dir()?;
             fs::create_dir_all(&data)?;
             let token = random_token()?;
-            let mut child = start_engine(&repo, &data, &token).unwrap_or_else(|error| fail(&format!("the engine could not be launched: {error}")));
+            let mut child = start_engine(&bundle, &data, &token).unwrap_or_else(|error| fail(&format!("the engine could not be launched: {error}")));
             let deadline = Instant::now() + Duration::from_secs(30);
             while !healthy() {
                 if let Ok(Some(status)) = child.try_wait() {
@@ -180,7 +189,7 @@ fn main() {
             );
             let url = format!("http://localhost:{UI_PORT}").parse().expect("static url");
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .title("Paradox (desktop POC · scripted)")
+                .title("Paradox (scripted)")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1024.0, 700.0)
                 .initialization_script(&init);

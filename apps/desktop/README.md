@@ -1,4 +1,4 @@
-# Paradox desktop shell: proof of concept
+# Paradox desktop app (portable build)
 
 A Tauri 2 shell for the existing React studio and the local Python engine. **Scripted only, dev machine only, not for merge without approval.**
 
@@ -16,7 +16,29 @@ A Tauri 2 shell for the existing React studio and the local Python engine. **Scr
 
 The browser demo (engine :8000, studio :5173, its own state dir) is untouched and can run at the same time.
 
-## Build and run
+
+## Portable build (this branch)
+
+`scripts/package-portable.sh` builds a self-contained `Paradox.app` (identifier `dev.paradox.desktop`), plus `release/Paradox-arm64.zip`.
+- **What it bundles:** a relocatable CPython 3.9.25 (python-build-standalone 20251031, SHA-256-pinned in `python-build-standalone.sha256`), the engine's pinned dependencies (`engine-requirements.txt`), the engine, `demo_app` and the scripted recipes. All of it goes under `Contents/Resources/engine/`.
+- **How the shell finds it:** the shell launches the engine from that resource directory. No path to the source checkout or a `.venv` is compiled in or bundled. The scan for this user's home path in Resources finds 0 files. Build-host paths appear only in Rust panic-location strings.
+- **Requirements on the target Mac:**
+  - Apple Silicon (arm64), macOS 11 or later
+  - no Python, Node, Rust or repository clone
+  - repository inspection (M1 `/api/repositories/*`) also needs `/usr/bin/git`, which comes with the Xcode Command Line Tools
+- **Signing:** ad-hoc only. It isn't notarized, because there's no Developer ID on the build machine, so Gatekeeper rejects it on first open. After unzipping, either:
+  - open it once, then go to System Settings → Privacy & Security → **Open Anyway**, or
+  - run `xattr -dr com.apple.quarantine Paradox.app`
+- **State:** `~/Library/Application Support/dev.paradox.desktop/`. This is separate from the POC app's `dev.paradox.desktop-poc`.
+
+```bash
+cd apps/desktop
+npm install && (cd ../studio && npm ci)
+scripts/package-portable.sh      # downloads and verifies the Python build once into ~/paradox-portable-cache
+npm run test:desktop             # or: PARADOX_DESKTOP_APP=/path/to/installed/Paradox.app npm run test:desktop
+```
+
+## Build and run (original POC, checkout-bound)
 
 Needs Rust (`rustup`, minimal profile), Node 20+, and `.venv` at the repository root (`python3 -m venv .venv && .venv/bin/pip install -e '.[test]'`).
 

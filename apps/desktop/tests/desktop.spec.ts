@@ -1,7 +1,7 @@
 // End-to-end checks for the desktop POC: the bundled studio as served by the .app,
 // against the scripted engine the .app launched. Scripted only; never a paid call.
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { ENGINE, UI, alive, crash, engineEnv, enginePid, launch, quit, resetState, token } from "./app.ts";
+import { DATA, ENGINE, UI, alive, crash, engineEnv, enginePid, launch, quit, resetState, token } from "./app.ts";
 
 test.describe.configure({ mode: "serial" });
 
@@ -58,7 +58,7 @@ test("1. fresh launch: isolated state, keyless engine, per-launch token", async 
   const env = engineEnv();
   expect(env).not.toContain("FACTORY_API_KEY");
   expect(env).toContain("PARADOX_AGENT=scripted");
-  expect(env).toContain("PARADOX_STATE_DIR=" + process.env.HOME + "/Library/Application Support/dev.paradox.desktop-poc/state");
+  expect(env).toContain("PARADOX_STATE_DIR=" + DATA + "/state");
   firstToken = token();
   const agents = await api<{ default: string; providers: Array<{ id: string; available: boolean }> }>("/api/agents");
   expect(agents.default).toBe("scripted");

@@ -1,4 +1,4 @@
-// Lifecycle helpers for the built Paradox Desktop POC.app.
+// Lifecycle helpers for the built Paradox.app (portable, engine bundled inside).
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -6,8 +6,9 @@ import { join, resolve } from "node:path";
 
 export const ENGINE = "http://127.0.0.1:8100";
 export const UI = "http://localhost:5190";
-export const APP = process.env.PARADOX_DESKTOP_APP ?? resolve(import.meta.dirname, "../src-tauri/target/release/bundle/macos/Paradox Desktop POC.app");
-export const DATA = join(homedir(), "Library/Application Support/dev.paradox.desktop-poc");
+export const APP = process.env.PARADOX_DESKTOP_APP ?? resolve(import.meta.dirname, "../src-tauri/target/release/bundle/macos/Paradox.app");
+export const APP_ID = process.env.PARADOX_DESKTOP_ID ?? "dev.paradox.desktop";
+export const DATA = join(homedir(), "Library/Application Support", APP_ID);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function listener(port: number): number | null {
@@ -81,7 +82,7 @@ async function gone(pids: Array<number | null>, ms = 20_000) {
 export async function quit(): Promise<number[]> {
   const e = enginePid(), a = appPid();
   const pids = [a, e, ...(e ? children(e) : [])].filter(Boolean) as number[];
-  execSync(`osascript -e 'tell application "Paradox Desktop POC" to quit'`);
+  execFileSync("osascript", ["-e", `tell application id "${APP_ID}" to quit`]);
   await gone(pids);
   return pids;
 }
