@@ -155,12 +155,58 @@ Local ignored logs: `.venv/m2a-http-integrated.log` and
 working `sandbox-exec` helper. Numeric `127.0.0.1` is required because the sandbox
 denies DNS/Mach brokers. Unavailable sandboxing fails closed before runtime spawn.
 
+## Independent single-process Runtime review
+
+The user subsequently approved narrowing imported execution to a single
+supervised process. This explicitly supersedes the original confined-child
+compatibility requirement; apps/tests needing workers or subprocesses are
+unsupported. It does not restrict trusted engine or agent orchestration.
+
+Codex 2 committed the implementation as `f8fdf67`, consumed here by history.
+The helper denies process creation and verifies enforcement with real fork and
+posix_spawn probes before permitting execution. A trusted external `python -I`
+supervisor launches the app as a separate session leader, retains the engine
+liveness pipe outside application control, and terminates/reaps the app with
+TERM followed by KILL if necessary. In-place exec does not remove supervision.
+
+Independent exact-`f8fdf67` selection:
+`tests/test_exec_sandbox.py`, `tests/test_projects_runtime.py`,
+`tests/test_projects_api.py`, and the original nine HTTP acceptance cases:
+**77 passed in 199.01 seconds**, no expected failures. This includes fork,
+spawn, indirect process creation, fail-closed enforcement tampering, real
+re-exec cleanup on close/project-switch/revoke, crash, timeout and cancellation.
+Local log: `.venv/m2a-single-process-review.log`.
+
+Additional A-owned HTTP coverage creates an actual untracked source
+`notes.sqlite3` containing a sentinel row before fingerprinting the repository.
+Every HTTP case compares all source and `.git` file hashes/mtimes and queries
+that sentinel using SQLite's immutable read-only mode after completion. A new
+explicit case generates/activates a future, writes managed state, restarts and
+reopens, and verifies the original database and all source files are unchanged.
+The initial ten-case run passed in 100.30 seconds.
+
+Two additional hostile cases perform a real scripted generation, then replace
+the outgoing parent application with a SIGTERM-ignoring state writer after
+proving a detached-spawn attempt was denied. The real timeline-activation and
+snapshot-restore routes must reap the outgoing PID, restore clean target state
+without the parent's late SQLite write, and prevent writer-marker recreation.
+Both passed in 28.45 seconds. These are timeline transitions, not merely
+switching between projects. These repeated selections are not additive distinct
+test totals.
+
+Final entire HTTP module on the additive test source: **12 passed in 123.52
+seconds**, no skips or expected failures. This includes the real SQLite
+sentinel in every fixture plus the two hostile timeline transitions. Source
+production remains exact `f8fdf67`; only this report and the A-owned HTTP tests
+changed. Log: `.venv/m2a-final-http-security-delta.log`. The new tests do not
+cover the validation-job `setsid()` finding described below.
+
 ## Exact remaining dependency and verdict
 
 **M2-A scripted generation and project HTTP workflow: focused GO at `8e66728`.
-Overall M2: NO-GO because of the detached-runtime-child lifecycle gap reported
-below, in addition to the outstanding combined regression/review gate. Passing
-the focused workflow tests is not a security or merge approval.**
+Runtime single-process security slice: independently passing at `f8fdf67`.
+Overall M2: NO-GO pending the separate validation-job session escape fix and
+final combined regression/review gate. Focused results are not merge approval.**
 
 Codex 2 reported a separate disposable adversarial reproduction on `8e66728`:
 an imported app launched the approved Python interpreter with
@@ -170,14 +216,17 @@ write the old future's permitted state after timeline switching or trust
 revocation. The probe explicitly killed its detached process group afterward.
 This finding is reported by B; it was not independently rerun by A.
 
-The nine HTTP acceptance cases do not cover detached descendants and cannot
-establish whole-process-tree cleanup or state-writer revocation. No fork/child
-policy or supervision change has been made by A. The frozen contract permits
-sandboxed children, so changing that policy or introducing reliable descendant
-supervision requires an agreed fix before M2 can be considered GO. The final
-regression gate must include a real detached-child test for close, timeline
-switching and trust revocation, without weakening existing child-confinement
-checks or relying only on parent/process-group termination.
+The approved single-process policy and independently tested Runtime supervision
+address that original Runtime path. B then reported a distinct validation-job
+gap: a sandboxed validation process can call `setsid()` without creating a child,
+escape the trusted job launcher's process group, and survive group-only
+cancellation/timeout. The Runtime app is already a session leader; the existing
+JobControl child is not. B owns the internal `jobs.py` supervision correction
+under the approved hardening scope, with no A interface changes. A has not
+independently rerun that new reproduction. No overall GO is claimed until the
+committed fix proves cancellation, timeout and engine-death cleanup for a
+re-exec/setsid state writer and passes the final combined regression gate. Any
+full-suite count on `f8fdf67` predates that correction.
 
 Mirrored project routes require explicit project open; GET does not implicitly
 start imported code. The lanes agreed to reuse frozen `409 project_busy` for a

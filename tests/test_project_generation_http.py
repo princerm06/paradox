@@ -1,6 +1,8 @@
 import hashlib
 import importlib.util
 from pathlib import Path
+import sqlite3
+import subprocess
 import sys
 import time
 
@@ -25,7 +27,7 @@ def fingerprint(root):
 
 
 @pytest.fixture
-def repository(tmp_path, monkeypatch):
+def repository(tmp_path, monkeypatch, request):
     for name in ('FACTORY_API_KEY', 'ANTHROPIC_API_KEY', 'PARADOX_REPOSITORY_ROOTS', 'PARADOX_TRUSTED_REPOSITORY_ROOTS'):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv('PARADOX_TOKEN', 'offline-project-token')
@@ -37,9 +39,38 @@ def repository(tmp_path, monkeypatch):
     builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(builder)
     source = builder.build_notes_repo(tmp_path)
+    if getattr(request, 'param', None) == 'reexec_writer':
+        writer = (
+            'import os,pathlib,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); '
+            'path=pathlib.Path(os.environ["PARADOX_APP_DIR"])/"writer-proof"; '
+            'exec("while True:\\n path.write_text(str(time.monotonic_ns()))\\n time.sleep(.05)")'
+        )
+        main = source / 'notes_app/main.py'
+        main.write_text(main.read_text() + '''
+import subprocess, sys
+@app.post("/replace")
+async def replace():
+    try:
+        subprocess.Popen([sys.executable, "-I", "-c", "pass"], start_new_session=True)
+    except PermissionError:
+        pass
+    else:
+        raise RuntimeError("detached child creation was not denied")
+    os.execv(sys.executable, [sys.executable, "-I", "-c", %r])
+''' % writer)
+        for arguments in [('add', 'notes_app/main.py'),
+                          ('-c', 'user.name=Disposable', '-c', 'user.email=fixture@example.invalid',
+                           'commit', '-m', 'add adversarial runtime fixture')]:
+            subprocess.run(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-C', str(source), *arguments],
+                           env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path)}, check=True, capture_output=True)
+    with sqlite3.connect(str(source / 'notes.sqlite3')) as database:
+        database.execute('CREATE TABLE source_sentinel (value TEXT NOT NULL)')
+        database.execute('INSERT INTO source_sentinel VALUES (?)', ('original source database',))
     before = fingerprint(source)
     yield source, tmp_path / 'engine'
     assert fingerprint(source) == before
+    with sqlite3.connect((source / 'notes.sqlite3').as_uri() + '?mode=ro&immutable=1', uri=True) as database:
+        assert database.execute('SELECT value FROM source_sentinel').fetchall() == [('original source database',)]
 
 
 def checked(client, method, path, status=200, **arguments):
@@ -192,6 +223,67 @@ def test_http_project_success_survives_restart_without_implicit_boot(repository)
         restored = checked(client, 'GET', prefix + '/generations/' + generation['id'])
         assert restored == result
         assert restored['timeline_id'] in {item['id'] for item in checked(client, 'GET', prefix + '/timelines')['timelines']}
+
+
+def test_http_source_sqlite_unchanged_after_generation_activation_and_reopen(repository):
+    source, state = repository
+    before = fingerprint(source)
+    with TestClient(create_app(state_dir=state, runtime_port=0), headers=AUTH) as client:
+        project, prefix, parent_id = prepare_project(client, source)
+        generation = start_generation(client, prefix, parent_id, 'prioritize notes')
+        result = wait_generation(client, prefix, generation['id'])
+        assert result['status'] == 'succeeded', result
+        checked(client, 'POST', prefix + '/timelines/' + result['timeline_id'] + '/activate')
+        preview(client, prefix, 'POST', json={'content': 'Managed future only', 'priority': 99})
+        assert fingerprint(source) == before
+    with TestClient(create_app(state_dir=state, runtime_port=0), headers=AUTH) as client:
+        assert checked(client, 'GET', prefix)['runtime']['status'] == 'stopped'
+        checked(client, 'POST', prefix + '/open', json={})
+        notes = preview(client, prefix)
+        assert notes['ordering'] == 'priority'
+        assert any(note['content'] == 'Managed future only' for note in notes['notes'])
+        assert fingerprint(source) == before
+        with sqlite3.connect((source / 'notes.sqlite3').as_uri() + '?mode=ro&immutable=1', uri=True) as database:
+            assert database.execute('SELECT value FROM source_sentinel').fetchall() == [('original source database',)]
+
+
+@pytest.mark.parametrize('repository', ['reexec_writer'], indirect=True)
+@pytest.mark.parametrize('transition', ['activate', 'restore'])
+def test_http_timeline_transition_stops_reexec_writer(repository, transition):
+    source, state = repository
+    before = fingerprint(source)
+    with TestClient(create_app(state_dir=state, runtime_port=0), headers=AUTH) as client:
+        project, prefix, parent_id = prepare_project(client, source)
+        generation = start_generation(client, prefix, parent_id, 'prioritize notes')
+        result = wait_generation(client, prefix, generation['id'])
+        assert result['status'] == 'succeeded', result
+        checkpoint = checked(client, 'POST', prefix + '/timelines/' + parent_id + '/snapshots', 201)
+        preview(client, prefix, 'POST', json={'content': 'Outgoing parent only', 'priority': 100})
+        runtime = client.app.state.projects.live[project['id']][0].runtime
+        application_pid = runtime.sandbox_pid
+        with pytest.raises(httpx.HTTPError):
+            httpx.post(runtime.url + '/replace', trust_env=False, timeout=.5)
+        marker = state / 'projects' / project['id'] / 'workspace/state/writer-proof'
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert marker.exists(), 'Re-exec writer did not start after detached spawn was denied'
+        if transition == 'activate':
+            checked(client, 'POST', prefix + '/timelines/' + result['timeline_id'] + '/activate')
+        else:
+            checked(client, 'POST', prefix + '/timelines/' + parent_id + '/restore',
+                    json={'snapshot_id': checkpoint['id']})
+        process = subprocess.run(['/bin/ps', '-o', 'stat=', '-p', str(application_pid)],
+                                 env={'PATH': '/usr/bin:/bin'}, capture_output=True, text=True, check=False)
+        assert not process.stdout.strip(), 'Outgoing application must be reaped, not merely signalled'
+        assert not marker.exists()
+        time.sleep(.25)
+        assert not marker.exists(), 'Outgoing writer mutated the restored future state'
+        notes = preview(client, prefix)
+        assert notes['ordering'] == ('priority' if transition == 'activate' else 'chronological')
+        assert 'Outgoing parent only' not in {note['content'] for note in notes['notes']}
+        assert fingerprint(source) == before
+        assert checked(client, 'GET', '/api/health')['status'] == 'ok'
 
 
 def test_http_project_shutdown_recovers_interrupted_generation(repository):
