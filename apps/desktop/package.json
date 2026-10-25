@@ -1,0 +1,17 @@
+{
+  "name": "paradox-desktop-poc",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Portable Tauri desktop showcase with bundled Factory prerequisites; not a hardened credential-isolated release.",
+  "type": "module",
+  "scripts": {
+    "dist:placeholder": "rm -rf dist && mkdir -p dist && cp placeholder/index.html dist/index.html",
+    "tauri": "tauri",
+    "dist:studio": "cd ../studio && VITE_PARADOX_API_BASE=http://127.0.0.1:8120 npm run build -- --outDir ../desktop/dist --emptyOutDir",
+    "test:desktop": "playwright test -c tests/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@playwright/test": "1.64.1"
+  }
+}
