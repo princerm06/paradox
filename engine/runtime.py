@@ -8,6 +8,8 @@ import time
 
 import httpx
 
+from engine.jobs import scrubbed_environment
+
 
 class Runtime:
     def __init__(self, root: Path, port: int = 8001, environment=None, control=None):
@@ -35,7 +37,9 @@ class Runtime:
             listener.bind(("127.0.0.1", self.port))
             listener.listen(128)
             self.port = listener.getsockname()[1]
-            environment = dict(self.environment) if self.environment is not None else os.environ.copy()
+            environment = dict(self.environment) if self.environment is not None else scrubbed_environment()
+            for name in ("FACTORY_API_KEY", "PARADOX_TOKEN", "PARADOX_SHELL_TOKEN", "ANTHROPIC_API_KEY"):
+                environment.pop(name, None)
             environment.pop("PYTHONPATH", None)
             environment.update(
                 PARADOX_APP_DIR=str(self.root / "workspace" / "state"),
