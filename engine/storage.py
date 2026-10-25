@@ -81,7 +81,12 @@ class Storage:
         temporary = self.snapshots / (snapshot_id + ".tmp")
         destination = self.snapshots / snapshot_id
         try:
-            copy_tree(self.workspace, temporary)
+            if self.profile.execution == "sandboxed":
+                temporary.mkdir()
+                for name in ("code", "state"):
+                    copy_tree(self.workspace / name, temporary / name)
+            else:
+                copy_tree(self.workspace, temporary)
             state = self.workspace / "state"
             for pattern in self.profile.sqlite_state_globs:
                 if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
@@ -123,7 +128,13 @@ class Storage:
 
     def initialize_workspace(self, demo_source):
         if self.profile.adapter != DEMO_PROFILE.adapter:
-            raise ValueError("Imported projects require adapter-managed workspace initialization")
+            from engine.adapters.fastapi_sqlite import ADAPTER
+            if self.profile.adapter != ADAPTER.id or self.profile.execution != "sandboxed":
+                raise ValueError("Unsupported imported project profile")
+            self.workspace.mkdir(exist_ok=True)
+            copy_tree(demo_source, self.workspace / "code")
+            ADAPTER.initialize_state(self.workspace / "state")
+            return
         self.workspace.mkdir(exist_ok=True)
         code = self.workspace / "code"
         code.mkdir(exist_ok=True)
