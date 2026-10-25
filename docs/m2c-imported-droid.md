@@ -50,17 +50,50 @@ Provider results preserve session identifiers, usage and logs. Existing
 generation orchestration retains diffs, validation, no-change/immutable guards,
 failure records, cancellation and restart recovery.
 
-## Evidence and remaining gates
+## Offline integration evidence
 
-The initial slice has mocked SDK Node policy tests and Python provider-boundary
-tests. They exercise actual mocked SDK edits, permission denial, failure,
-interruption, session closure, strict tool catalogs, exact payloads, operator
-opt-in and credential separation. They do not prove live Droid behavior.
+- SDK policy slice `e35779b`: 78 Node tests and 38 Python provider tests passed.
+  The session interface is mocked; no real Factory session is created.
+- Shared helper/router source `c525fac`, plus the HTTP/provider tests in this
+  report's commit: 9 real HTTP/direct-provider cases passed in 71.15 seconds.
+  The trusted fixture imports the real compiled `runAdapter` and
+  `verifyWriteSandbox` but supplies a fake SDK implementation. It performs real
+  file edits, permission callbacks and kernel-denied write attempts. The normal
+  compile, test, boot/smoke, adoption and activation pipeline runs without mocks.
+- The success case records five passing tests, real changed files and patch,
+  parent/future/generation association, the fake SDK session ID, permission
+  decisions and invocation count in agent logs, and durable state after restart.
+  Usage is null, not fabricated real-provider credits. Approval evidence is
+  logged decisions; no new public approval-result schema is introduced.
+- Failure cases cover SDK denial, SDK exception, no edits, invalid Python and a
+  failing generated test. Each preserves the parent's active timeline and records
+  the failing stage without adopting a future.
+- Cancellation is durable. A separately seeded interrupted persisted record
+  exercises startup recovery and removal of private residual SDK session files.
+  This deterministic persistence test is not an OS-crash or real-SDK crash test.
+- Every HTTP repository fixture contains a real SQLite source database with a
+  sentinel row. Teardown checks all source and Git file hashes and mtimes, and
+  queries the source sentinel read-only: the original repository is unchanged.
+- Generated tests assert Factory/engine/shell credentials are absent. Provider
+  tests verify only the trusted fake agent receives the dummy Factory key.
+  Logs must not contain it. The actual kernel denies protected test/manifest
+  writes and writes outside future code even without relying on the callback.
+- An independent 40-test profile/validation regression passed in 28.56 seconds.
 
-Still required before M2-C offline GO: reviewed imported-agent kernel helper,
-router/profile integration by shared ancestry, real HTTP mocked-SDK generation
-through sandboxed validation/runtime, cancellation/recovery and unchanged-source
-evidence, followed by the combined offline regression suite.
+Commands run with Factory, Anthropic, OpenAI, engine and shell credentials unset
+in the outer environment and `PARADOX_AGENT=scripted`; tests inject dummy-only
+credentials and explicitly choose Droid for fake-SDK cases:
+
+```sh
+npm --prefix engine/droid_adapter test
+.venv/bin/python -m pytest -q tests/test_project_droid_provider.py tests/test_droid_provider.py -k 'not live_droid'
+.venv/bin/python -m pytest -q tests/test_project_droid_http.py
+.venv/bin/python -m pytest -q tests/test_project_generation_profiles.py tests/test_project_generation_validation.py
+```
+
+Still required before M2-C offline GO: trusted-agent process-group cleanup review
+and its adversarial regressions, final combined offline regression and security
+handoff. No real-provider readiness is implied by mocked HTTP success.
 
 Before separately authorized live verification: review ancestor configuration,
 hooks/skills/MCP autoload and trusted-agent cleanup; verify actual effective
