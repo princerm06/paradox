@@ -73,7 +73,7 @@ class JobControl:
             )
             try:
                 process = subprocess.Popen(
-                    [sys.executable, "-c", launcher, str(death_read), *command],
+                    [sys.executable, "-I", "-c", launcher, str(death_read), *command],
                     cwd=cwd, env=environment or scrubbed_environment(),
                     stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True, pass_fds=(death_read,),
