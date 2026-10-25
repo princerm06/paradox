@@ -1,4 +1,4 @@
-import { Background, MiniMap, Panel, ReactFlow, ReactFlowProvider, useReactFlow, useUpdateNodeInternals, type Edge, type NodeTypes, type ReactFlowInstance } from "@xyflow/react";
+import { Background, MiniMap, Panel, ReactFlow, ReactFlowProvider, useReactFlow, useUpdateNodeInternals, useViewport, type Edge, type NodeTypes, type ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useWorkspace } from "../state/workspace.tsx";
 import { ancestry } from "./tree.ts";
@@ -26,7 +26,7 @@ type ZoomRange = { min: number; max: number };
 
 const FRAME_GAP = 28;
 const FOCUS_ZOOM: ZoomRange = { min: 0.68, max: 1.15 };
-const FIT_ZOOM: ZoomRange = { min: 0.45, max: 1.15 };
+const FIT_ZOOM: ZoomRange = { min: 0.2, max: 1.05 };
 const SIBLING_ZOOM_FLOOR = 0.8;
 const MAX_SIBLINGS = 2;
 
@@ -45,9 +45,11 @@ function freeArea(host: HTMLElement): Box {
   for (const side of [rectOf(".portal-float"), rectOf(".inspector-float")]) {
     if (side) right = Math.min(right, side.left - bounds.left - FRAME_GAP);
   }
-  for (const below of [rectOf(".composer-dock"), rectOf(".canvas-dock")]) {
+  for (const below of [rectOf(".composer-dock"), rectOf(".graph-legend"), rectOf(".react-flow__minimap")]) {
     if (below) bottom = Math.min(bottom, below.top - bounds.top - FRAME_GAP / 2);
   }
+  const tools = rectOf(".canvas-dock");
+  if (tools) top = Math.max(top, tools.bottom - bounds.top + FRAME_GAP / 2);
   if (right - left < 240) {
     left = FRAME_GAP;
     right = bounds.width - FRAME_GAP;
@@ -132,6 +134,7 @@ function frameBoxes(
 }
 
 function frameFocus(flow: ReactFlowInstance, host: HTMLElement, focusId: string, edges: Edge[], duration: number): Promise<boolean> | null {
+  if (host.clientWidth < 600) return frameBoxes(flow, host, [focusId], focusId, { min: 0.68, max: 1.05 }, duration);
   const { core, siblings } = neighborhood(focusId, edges);
   return frameBoxes(flow, host, core, focusId, FOCUS_ZOOM, duration, siblings);
 }
@@ -149,11 +152,14 @@ export function TimelineCanvas({ insetLeft = false, layoutKey = "" }: { insetLef
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const update = () => setReady(host.clientWidth > 0 && host.clientHeight > 0);
+    let frame = 0;
+    const update = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => setReady(host.clientWidth > 0 && host.clientHeight > 0));
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(host);
-    const frame = window.requestAnimationFrame(update);
     return () => {
       window.cancelAnimationFrame(frame);
       observer.disconnect();
@@ -211,13 +217,31 @@ function Flow({
   const edgesRef = useRef(edges);
   const flowRef = useRef(flow);
   const focused = useRef<string | null>(null);
+  const [frameSize, setFrameSize] = useState("");
   updateRef.current = updateNodeInternals;
   nodesRef.current = nodes;
   edgesRef.current = edges;
   flowRef.current = flow;
   const nodeKey = nodes.map((node) => node.id).join("|");
   const focusId = selectedGenerationId ? generationNodeId(selectedGenerationId) : selectedId ?? activeTimelineId;
-  const frameKey = focusId ? `${focusId}#${layoutKey}` : null;
+  const frameKey = focusId ? `${focusId}#${layoutKey}#${frameSize}` : null;
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    let frame = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const size = `${Math.round(entry.contentRect.width)}x${Math.round(entry.contentRect.height)}`;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => setFrameSize(size));
+    });
+    observer.observe(host);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [hostRef]);
 
   const measure = () => {
     for (const node of nodesRef.current) updateRef.current(node.id);
@@ -275,8 +299,8 @@ function Flow({
       edges={edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
-      minZoom={0.45}
-      maxZoom={1.35}
+      minZoom={0.2}
+      maxZoom={1.6}
       defaultViewport={{ x: 80, y: 80, zoom: 1 }}
       nodesDraggable={false}
       nodesConnectable={false}
@@ -293,7 +317,7 @@ function Flow({
       attributionPosition="bottom-left"
       defaultEdgeOptions={{ type: "branch" }}
     >
-      <Background color="#243044" gap={28} size={1} />
+      <Background color="#38304f" gap={24} size={0.8} />
       <MiniMap
         pannable
         zoomable
@@ -301,11 +325,15 @@ function Flow({
         bgColor="#10141c"
         maskColor="rgba(6, 8, 14, 0.72)"
         nodeStrokeWidth={2}
+        nodeColor={(node) => node.data.isActive ? "#48d7ee" : node.data.isFailed ? "#f66d87" : "#9673ff"}
         style={{ width: 148, height: 92 }}
         ariaLabel="Timeline overview"
       />
       <Panel position="bottom-left" className="canvas-dock">
         <GraphTools focusId={focusId} hostRef={hostRef} edges={edges} />
+      </Panel>
+      <Panel position="bottom-left" className="graph-legend" aria-label="Timeline state legend">
+        <span className="legend-live">Live</span><span className="legend-selected">Selected</span><span className="legend-attempt">Attempt</span>
       </Panel>
     </ReactFlow>
   );
@@ -314,13 +342,16 @@ function Flow({
 function GraphTools({ focusId, hostRef, edges }: { focusId: string | null; hostRef: RefObject<HTMLDivElement | null>; edges: Edge[] }) {
   const flow = useReactFlow();
   const { zoomIn, zoomOut } = flow;
+  const { zoom } = useViewport();
+  const duration = prefersReducedMotion() ? 0 : 160;
 
   return (
     <div className="graph-tools" role="toolbar" aria-label="Timeline graph">
-      <button type="button" className="btn" aria-label="Zoom out" onClick={() => void zoomOut({ duration: 160 })}>
+      <button type="button" className="btn" aria-label="Zoom out" onClick={() => void zoomOut({ duration })}>
         −
       </button>
-      <button type="button" className="btn" aria-label="Zoom in" onClick={() => void zoomIn({ duration: 160 })}>
+      <output className="graph-zoom" aria-label="Current zoom">{Math.round(zoom * 100)}%</output>
+      <button type="button" className="btn" aria-label="Zoom in" onClick={() => void zoomIn({ duration })}>
         +
       </button>
       <button
@@ -329,7 +360,7 @@ function GraphTools({ focusId, hostRef, edges }: { focusId: string | null; hostR
         onClick={() => {
           if (!hostRef.current) return;
           const ids = flow.getNodes().map((node) => node.id);
-          void frameBoxes(flow, hostRef.current, ids, null, FIT_ZOOM, 160);
+          void frameBoxes(flow, hostRef.current, ids, null, FIT_ZOOM, duration);
         }}
       >
         Fit
@@ -340,7 +371,7 @@ function GraphTools({ focusId, hostRef, edges }: { focusId: string | null; hostR
         disabled={!focusId}
         onClick={() => {
           if (!focusId || !hostRef.current) return;
-          void frameFocus(flow, hostRef.current, focusId, edges, 160);
+          void frameFocus(flow, hostRef.current, focusId, edges, duration);
         }}
       >
         Center

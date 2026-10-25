@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentList } from "../api/types.ts";
 import { ChangeCount, DiffView, FileStatusMark, LoadingLine, Notice, Provenance } from "../evidence/EvidenceViews.tsx";
 import { timelineById } from "../graph/tree.ts";
@@ -11,8 +11,8 @@ import { resolveSubject, subjectKey, subjectOptions, timelineOrigin } from "../l
 import { useNavigation, type Subject } from "../shell/navigation.tsx";
 import { useEngine } from "../state/engine.tsx";
 import { useWorkspace } from "../state/workspace.tsx";
-import { ArchCanvas } from "./ArchCanvas.tsx";
-import { buildSystemModel, changeEntries, listEndpoints, schemaFields, schemaName, resolveSchema, type ArchNode, type ChangeEntry, type Endpoint } from "./model.ts";
+import { ArchCanvas, ComponentIcon } from "./ArchCanvas.tsx";
+import { buildSystemModel, changeEntries, listEndpoints, schemaFields, schemaName, resolveSchema, type ArchModel, type ArchNode, type ChangeEntry, type Endpoint } from "./model.ts";
 
 type Lens = "system" | "endpoints" | "changes";
 type Picked = { kind: "node"; id: string } | { kind: "endpoint"; id: string } | { kind: "file"; path: string } | null;
@@ -22,6 +22,10 @@ export function ArchitectView({ onConsumed }: { onConsumed: () => void }) {
   const navigation = useNavigation();
   const [lens, setLens] = useState<Lens>("system");
   const [picked, setPicked] = useState<Picked>(null);
+  const inspector = useRef<HTMLElement>(null);
+  useEffect(() => {
+    inspector.current?.scrollTo?.({ top: 0 });
+  }, [picked, lens]);
   const [chosen, setSubject] = useState<Subject | null>(() => navigation.pendingArchitect);
   // Until the user picks, follow the Explore selection (which defaults to the live future).
   const subject: Subject | null =
@@ -75,10 +79,9 @@ export function ArchitectView({ onConsumed }: { onConsumed: () => void }) {
     <div className="mode-view architect">
       <header className="mode-head glass-panel">
         <div className="mode-title">
-          <p className="brand-kicker">Architect</p>
-          <h1>
-            Architecture <span className="fine">/ {resolved ? resolved.name : "no future selected"}</span>
-          </h1>
+          <p className="brand-kicker">Architect / system boundaries</p>
+          <h1>System Architecture</h1>
+          <p className="fine">Explore the local stack and trace each fact to its source.</p>
         </div>
         <div className="lens-tabs" role="tablist" aria-label="Architecture lens">
           {(
@@ -133,6 +136,10 @@ export function ArchitectView({ onConsumed }: { onConsumed: () => void }) {
       </header>
 
       <section className="arch-stage glass-panel" aria-label="Architecture map">
+        <div className="arch-map-heading">
+          <div><span className="brand-kicker">{lens === "system" ? "Paradox local stack" : lens === "endpoints" ? "Engine API surface" : "Future change map"}</span><p>{lens === "system" ? "System context, not an imported-project topology." : lens === "endpoints" ? "Operations reported by the live OpenAPI schema." : "Generation records and diffs, without inferred runtime claims."}</p></div>
+          <span className="arch-scope">Read-only inspection</span>
+        </div>
         {lens === "system" ? (
           <>
             <ArchCanvas model={model} selectedId={pickedNode?.id ?? null} onSelect={(id) => setPicked({ kind: "node", id })} />
@@ -160,13 +167,14 @@ export function ArchitectView({ onConsumed }: { onConsumed: () => void }) {
         ) : null}
       </section>
 
-      <aside className="arch-inspector glass-panel" aria-label="Architecture inspector">
-        {pickedNode ? <NodeDetail node={pickedNode} entries={entries} onFile={(path) => { setLens("changes"); setPicked({ kind: "file", path }); }} /> : null}
+      <aside className="arch-inspector glass-panel" aria-label="Architecture inspector" ref={inspector}>
+        <div className="arch-inspector-heading"><span className="brand-kicker">Component inspector</span><span className="fine">Source-backed evidence</span></div>
+        {pickedNode ? <NodeDetail node={pickedNode} model={model} entries={entries} onNode={(id) => setPicked({ kind: "node", id })} onFile={(path) => { setLens("changes"); setPicked({ kind: "file", path }); }} /> : null}
         {pickedEndpoint ? <EndpointDetail endpoint={pickedEndpoint} openapi={openapi.status === "ready" ? openapi.data : null} /> : null}
         {pickedFile ? <FileDetail entry={pickedFile} generationProvider={generation?.provider ?? null} /> : null}
         {!picked || (!pickedNode && !pickedEndpoint && !pickedFile) ? (
           <div className="arch-empty">
-            <p className="brand-kicker">Inspector</p>
+            <span className="arch-detail-icon"><ComponentIcon kind="service" /></span>
             <h2>{lens === "system" ? "Select a boundary" : lens === "endpoints" ? "Select an endpoint" : "Select a changed file"}</h2>
             <p className="fine">
               {lens === "system"
@@ -175,9 +183,9 @@ export function ArchitectView({ onConsumed }: { onConsumed: () => void }) {
                   ? "Endpoints come from the engine's live OpenAPI schema."
                   : "Files come from the selected future's generation record and unified diff."}
             </p>
-            <Unavailable />
           </div>
         ) : null}
+        <Unavailable />
         {resolved ? (
           <div className="context-links">
             <button type="button" className="text-btn" onClick={() => (resolved.subject.kind === "timeline" ? navigation.inspectTimeline(resolved.subject.id) : navigation.inspectGeneration(resolved.subject.id))}>
@@ -205,6 +213,7 @@ function Legend({ touched, subjectName }: { touched: boolean; subjectName: strin
       <span>
         <i className="lg inferred" /> Inferred from file paths
       </span>
+      <span><i className="lg no-source" /> Unavailable · not measured</span>
       {touched && subjectName ? (
         <span>
           <i className="lg change" /> Touched by {subjectName}
@@ -217,21 +226,24 @@ function Legend({ touched, subjectName }: { touched: boolean; subjectName: strin
 function Unavailable() {
   return (
     <div className="unavailable">
-      <p className="brand-kicker">Not available from the engine</p>
+      <p><Provenance kind="unavailable" /> <span className="brand-kicker">Coverage limits</span></p>
       <ul>
         <li>Source-level dependency or import graph</li>
         <li>Live latency, throughput, error-rate or resource metrics</li>
         <li>Per-component health beyond engine and runtime</li>
+        <li>Imported-project topology and architecture comparison</li>
       </ul>
-      <p className="fine">The engine exposes no architecture or telemetry API, so Paradox shows none of these instead of guessing.</p>
+      <p className="fine">These capabilities have no connected evidence source in this workspace. Missing evidence is not guessed.</p>
     </div>
   );
 }
 
-function NodeDetail({ node, entries, onFile }: { node: ArchNode; entries: ChangeEntry[]; onFile: (path: string) => void }) {
+function NodeDetail({ node, model, entries, onFile, onNode }: { node: ArchNode; model: ArchModel; entries: ChangeEntry[]; onFile: (path: string) => void; onNode: (id: string) => void }) {
   const touched = entries.filter((entry) => node.touched?.includes(entry.path));
+  const relationships = model.edges.filter((edge) => edge.from === node.id || edge.to === node.id);
   return (
     <div className="arch-detail">
+      <span className="arch-detail-icon"><ComponentIcon kind={node.kind} /></span>
       <p className="brand-kicker">{node.kind}</p>
       <h2>{node.label}</h2>
       <p className="fine">{node.sub}</p>
@@ -251,6 +263,17 @@ function NodeDetail({ node, entries, onFile }: { node: ArchNode; entries: Change
           {note}
         </p>
       ))}
+      {relationships.length ? <section className="arch-relationships">
+        <h3>System relationships</h3>
+        {relationships.map((edge) => {
+          const other = model.nodes.find((item) => item.id === (edge.from === node.id ? edge.to : edge.from));
+          return other ? <div key={edge.id}>
+            <button type="button" className="text-btn" onClick={() => onNode(other.id)}>{edge.from === node.id ? "→" : "←"} {other.label}</button>
+            {edge.label ? <span className="fine">{edge.label}</span> : null}
+            <Provenance kind={edge.prov} source={edge.source} />
+          </div> : null;
+        })}
+      </section> : null}
       {touched.length ? (
         <section>
           <h3>

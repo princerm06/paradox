@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../state/workspace.tsx";
 import { timelineById } from "../graph/tree.ts";
-import { RefreshIcon } from "../shell/icons.tsx";
+import { Mark, RefreshIcon } from "../shell/icons.tsx";
 
 export function LiveWorkspace({
   expanded,
@@ -12,7 +12,7 @@ export function LiveWorkspace({
   onExpandedChange: (expanded: boolean) => void;
   onCollapse: () => void;
 }) {
-  const { appUrl, timelines, activeTimelineId, selectedId, connected, healthError, previewNonce, refreshPreview } = useWorkspace();
+  const { appUrl, timelines, activeTimelineId, selectedId, connected, health, healthError, previewNonce, refreshPreview } = useWorkspace();
   const active = timelineById(timelines, activeTimelineId);
   const inspectingAnother = Boolean(selectedId && activeTimelineId && selectedId !== activeTimelineId);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -46,6 +46,13 @@ export function LiveWorkspace({
   return (
     <section className={expanded ? "portal-float is-expanded" : "portal-float"} aria-label="Live application">
       <div className={arriving ? "portal is-arriving" : "portal"}>
+      <div className="preview-heading">
+        <Mark />
+        <div><p className="brand-kicker">Live application preview</p><h2>Application preview</h2></div>
+        <span className={connected && health?.runtime_running ? "preview-state is-running" : "preview-state"}>
+          {connected && health ? health.runtime_running ? "Running" : "Stopped" : "Unknown"}
+        </span>
+      </div>
       <header className="browser">
         <div className="traffic" aria-hidden="true">
           <i />

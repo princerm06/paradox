@@ -12,9 +12,9 @@ function readData(data: unknown): BranchEdgeData {
 }
 
 const STROKE: Record<NonNullable<BranchEdgeData["tone"]>, string> = {
-  live: "#3ee0c5",
-  selected: "#8b7cff",
-  quiet: "#4a5570",
+  live: "#48d7ee",
+  selected: "#a17cff",
+  quiet: "#55477c",
 };
 
 /** Clears the card border so the bead sits on the path rather than under the node. */
@@ -63,7 +63,7 @@ export function BranchEdge({
           id={`${id}-halo`}
           path={path}
           interactionWidth={0}
-          style={{ stroke, strokeWidth: 6, strokeLinecap: "round", opacity: 0.13 }}
+          style={{ stroke, strokeWidth: 9, strokeLinecap: "round", opacity: 0.1 }}
         />
       ) : null}
       <BaseEdge

@@ -5,6 +5,7 @@ import { useAskInspect } from "../shell/inspect.tsx";
 import { useWorkspace } from "../state/workspace.tsx";
 import { InspectButton, Lineage, StatusChip, type StateKind } from "./NodeChrome.tsx";
 import type { GhostFlowNode, GhostNodeData } from "./layout.ts";
+import { FutureVisual, SelectionChip } from "./FutureVisual.tsx";
 
 function phase(data: GhostNodeData): StateKind {
   if (data.isFailed) return "failed";
@@ -55,13 +56,17 @@ export const GhostNode = memo(function GhostNode({ data }: NodeProps<GhostFlowNo
         aria-label={label}
         onClick={() => selectGeneration(data.generationId)}
       >
-        <span className="future-head">
+        <FutureVisual attempt />
+        <span className="future-copy">
+          <span className="future-flags">
+            <span className="ghost-tag">Attempt</span>
+            {selected ? <SelectionChip /> : null}
+          </span>
           <span className="future-name" title={data.name}>
             {data.name}
           </span>
-          <span className="ghost-tag">Attempt</span>
+          <Lineage relation={relation} when={when || null} hint={lineageHint} />
         </span>
-        <Lineage relation={relation} when={when || null} hint={lineageHint} />
       </button>
       <span className="future-foot">
         <StatusChip kind={kind} label={data.statusText} hint={HINTS[kind]} />

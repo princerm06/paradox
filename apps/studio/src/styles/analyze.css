@@ -1,0 +1,84 @@
+/* Slice 4: Analyze, adapted from the Figma Make comparison composition. */
+.analyze {
+  gap: 14px;
+  padding: 0 24px 24px;
+  background: radial-gradient(circle at 65% 0, #18132b, transparent 32%), var(--bg);
+}
+.analyze .mode-head.glass-panel {
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px 24px;
+  margin: 0 -24px;
+  padding: 24px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: linear-gradient(110deg, #11101d99, #090b12);
+}
+.analyze .mode-title { flex: 1 1 340px; }
+.analyze .mode-title h1 { font-size: 25px; letter-spacing: -.035em; margin: 6px 0; }
+.analyze .mode-title > .fine { font-size: 12px; }
+
+.analyze .evidence-key { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 8px; color: var(--faint); font-size: 11px; }
+.analyze .evidence-key span { display: inline-flex; align-items: center; gap: 6px; }
+.analyze .evidence-key i { width: 7px; height: 7px; border-radius: 50%; background: #5d6371; }
+.analyze .evidence-key .key-observed { background: var(--mint); }
+.analyze .evidence-key .key-note { font-family: var(--mono); font-size: 10px; color: #6e7585; }
+
+.analyze .compare-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(145deg, #11141d, #0d0f16);
+}
+.analyze .compare-slot { display: grid; gap: 6px; min-width: 0; }
+.analyze .compare-slot small { color: #7d8597; font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.analyze .compare-slot .subject-pick { margin: 0; width: 100%; background: #131420; border-color: #2f3445; border-radius: 9px; }
+.analyze .compare-slot.side-a .subject-pick { box-shadow: inset 3px 0 0 #48d7ee99; }
+.analyze .compare-slot.side-b .subject-pick { box-shadow: inset 3px 0 0 #9673ffb3; }
+.analyze .compare-slot .subject-pick select { flex: 1; min-width: 0; max-width: none; }
+.analyze .slot-facts { color: var(--faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analyze .compare-head .swap { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; border: 1px solid #3d345b; background: #1a1630; color: #c3b2ff; }
+.analyze .compare-head .swap:hover { border-color: var(--violet); }
+.analyze .compare-head .select-note { grid-column: 1 / -1; margin: 0; }
+
+.analyze .analyze-tabs { gap: 4px; padding: 0; border-bottom: 1px solid var(--line); background: transparent; }
+.analyze .analyze-tabs .tab { position: relative; min-width: 96px; padding: 11px 14px; border-radius: 0; background: transparent; color: var(--muted); font-size: 13px; }
+.analyze .analyze-tabs .tab:hover { color: var(--text); }
+.analyze .analyze-tabs .tab.is-on { color: #e2deef; background: #9673ff09; box-shadow: inset 0 -2px var(--violet); }
+.analyze .tab-count { margin-left: 6px; color: var(--mint); font: 10px var(--mono); }
+
+.analyze .analysis-grid { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 14px; align-items: start; }
+.analyze .summary-main { display: grid; gap: 12px; min-width: 0; }
+.analyze .glass-panel { background: #0b0d13; border: 1px solid var(--line); border-radius: 12px; box-shadow: none; }
+.analyze .subject-card.side-a { box-shadow: inset 3px 0 0 #48d7ee99; }
+.analyze .subject-card.side-b { box-shadow: inset 3px 0 0 #9673ffb3; }
+
+.analyze .coverage { display: grid; gap: 2px; padding: 16px; position: sticky; top: 12px; }
+.analyze .coverage h2 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.analyze .coverage h4 { margin: 12px 0 4px; color: #7d8597; font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.analyze .result { display: flex; align-items: flex-start; gap: 10px; padding: 10px 2px; border-bottom: 1px solid #1c2028; }
+.analyze .result:last-child { border-bottom: 0; }
+.analyze .result > div { display: grid; gap: 3px; min-width: 0; }
+.analyze .result strong { font-size: 12.5px; color: #cbd1dd; }
+.analyze .result > div > span { font-size: 11.5px; color: var(--faint); line-height: 1.45; }
+.analyze .result.is-ok strong { color: var(--mint); }
+.analyze .result.is-bad strong { color: var(--danger); }
+.analyze .result .prov { flex-shrink: 0; margin-top: 1px; }
+
+@media (max-width: 1180px) {
+  .analyze .analysis-grid { grid-template-columns: 1fr; }
+  .analyze .coverage { position: static; }
+}
+@media (max-width: 760px) {
+  .analyze { padding: 0 14px 18px; }
+  .analyze .mode-head.glass-panel { margin: 0 -14px; padding: 18px 14px; }
+  .analyze .compare-head { grid-template-columns: 1fr; }
+  .analyze .compare-head .swap { justify-self: center; transform: rotate(90deg); }
+  .analyze .analyze-tabs { overflow-x: auto; }
+  .analyze .analyze-tabs .tab { min-width: 0; }
+}

@@ -5,6 +5,7 @@ import { useAskInspect } from "../shell/inspect.tsx";
 import { useWorkspace } from "../state/workspace.tsx";
 import { InspectButton, Lineage, LiveChip, StatusChip, type StateKind } from "./NodeChrome.tsx";
 import type { TimelineFlowNode, TimelineNodeData } from "./layout.ts";
+import { FutureVisual, SelectionChip } from "./FutureVisual.tsx";
 
 function lifecycle(data: TimelineNodeData): StateKind {
   if (data.isRoot) return "root";
@@ -55,13 +56,18 @@ export const TimelineNode = memo(function TimelineNode({ id, data }: NodeProps<T
     <div className={className} title={data.modificationText ? `Change: ${data.modificationText}` : undefined}>
       {data.isRoot ? null : <Handle type="target" position={Position.Left} isConnectable={false} />}
       <button type="button" className="future-select" aria-pressed={selected} aria-label={label} onClick={() => selectTimeline(id)}>
-        <span className="future-head">
+        <FutureVisual />
+        <span className="future-copy">
+          <span className="future-flags">
+            {data.isActive ? <LiveChip /> : null}
+            {selected ? <SelectionChip /> : null}
+            {!data.isActive && !selected ? <span className="future-kind">Code timeline</span> : null}
+          </span>
           <span className="future-name" title={data.name}>
             {data.name}
           </span>
-          {data.isActive ? <LiveChip /> : null}
+          <Lineage relation={relation} when={when || null} hint={lineageHint} />
         </span>
-        <Lineage relation={relation} when={when || null} hint={lineageHint} />
       </button>
       <span className="future-foot">
         <StatusChip kind={kind} label={data.statusText} hint={HINTS[kind]} />

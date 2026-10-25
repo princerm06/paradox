@@ -3,10 +3,10 @@ import type { Generation, Timeline } from "../api/types.ts";
 import { generationStageLabel, modificationLabel, statusLabel } from "../lib/format.ts";
 import { isActiveGeneration } from "../lib/generation.ts";
 
-export const NODE_W = 260;
-export const NODE_H = 108;
-const GAP_X = 104;
-const GAP_Y = 28;
+export const NODE_W = 288;
+export const NODE_H = 160;
+const GAP_X = 116;
+const GAP_Y = 52;
 
 export function generationNodeId(id: string): string {
   return `generation:${id}`;

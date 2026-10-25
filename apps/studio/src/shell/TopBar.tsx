@@ -1,6 +1,6 @@
 import { timelineById } from "../graph/tree.ts";
 import { useWorkspace } from "../state/workspace.tsx";
-import { Mark } from "./icons.tsx";
+import { Mark, ModeIcon } from "./icons.tsx";
 import type { StudioMode } from "./navigation.tsx";
 import { SettingsMenu } from "./SettingsMenu.tsx";
 
@@ -54,6 +54,7 @@ export function TopBar({
             aria-current={mode === item.id ? "page" : undefined}
             onClick={() => onMode(item.id)}
           >
+            <ModeIcon mode={item.id} />
             {item.label}
           </button>
         ))}

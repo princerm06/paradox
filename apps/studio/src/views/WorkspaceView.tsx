@@ -12,6 +12,7 @@ import { useWorkspace } from "../state/workspace.tsx";
 const ArchitectView = lazy(() => import("../architect/ArchitectView.tsx").then((module) => ({ default: module.ArchitectView })));
 const AnalyzeView = lazy(() => import("../analyze/AnalyzeView.tsx").then((module) => ({ default: module.AnalyzeView })));
 import { FirstRun } from "../shell/FirstRun.tsx";
+import { ModeIcon } from "../shell/icons.tsx";
 
 const WIDE_STAGE = "(min-width: 1680px)";
 
@@ -53,7 +54,15 @@ export function WorkspaceView() {
   const [pendingArchitect, setPendingArchitect] = useState<Subject | null>(null);
   const inspectorOn = inspectorOpen && mode === "explore";
   const futuresOverlay = futuresOpen && !wide;
-  const stageClass = ["studio-stage", `mode-${mode}`, inspectorOn ? "inspector-on" : "", portalOpen ? "portal-on" : "", futuresOverlay ? "futures-overlay" : ""]
+  const stageClass = [
+    "studio-stage",
+    `mode-${mode}`,
+    inspectorOn ? "inspector-on" : "",
+    portalOpen ? "portal-on" : "",
+    futuresOverlay ? "futures-overlay" : "",
+    portalOpen || inspectorOn ? "has-details" : "",
+    portalExpanded ? "preview-expanded" : "",
+  ]
     .filter(Boolean)
     .join(" ");
   const layoutKey = [futuresOpen, portalOpen, portalExpanded, inspectorOn].map(Number).join("");
@@ -126,25 +135,46 @@ export function WorkspaceView() {
         <main className={stageClass} id="studio-main">
           {mode === "explore" ? (
             <InspectProvider ask={() => setInspectorOpen(true)}>
-              <TimelineCanvas insetLeft={futuresOpen} layoutKey={layoutKey} />
-              <ExploreHeader futuresOpen={futuresOpen} onFutures={() => setFuturesOpen((open) => !open)} />
-              {futuresOpen ? (
-                <TimelineExplorer onClose={() => setFuturesOpen(false)} onPick={futuresOverlay ? () => setFuturesOpen(false) : undefined} />
-              ) : null}
-              {portalOpen ? (
-                <LiveWorkspace
-                  expanded={portalExpanded}
-                  onExpandedChange={setPortalExpanded}
-                  onCollapse={() => {
-                    setPortalOpen(false);
-                    setPortalExpanded(false);
-                  }}
-                />
-              ) : null}
-              <div className="composer-dock">
-                <PromptComposer />
+              <nav className="explore-rail" aria-label="Explore tools">
+                <button type="button" aria-pressed={!futuresOpen} onClick={() => setFuturesOpen(false)}>
+                  <ModeIcon mode="explore" /><span>Timeline</span>
+                </button>
+                <button type="button" aria-pressed={futuresOpen} onClick={() => setFuturesOpen((open) => !open)}>
+                  <ModeIcon mode="architect" /><span>Futures</span>
+                </button>
+                <button type="button" onClick={() => go("analyze")}>
+                  <ModeIcon mode="analyze" /><span>Compare</span>
+                </button>
+                <button type="button" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen((open) => !open)}>
+                  <span aria-hidden="true">⌕</span><span>Inspect</span>
+                </button>
+                <button type="button" className="rail-compose" onClick={() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus()}>
+                  <span aria-hidden="true">＋</span><span>Compose</span>
+                </button>
+              </nav>
+              <section className="explore-canvas" aria-label="Software futures">
+                <TimelineCanvas insetLeft={futuresOpen} layoutKey={layoutKey} />
+                <ExploreHeader futuresOpen={futuresOpen} onFutures={() => setFuturesOpen((open) => !open)} />
+                {futuresOpen ? (
+                  <TimelineExplorer onClose={() => setFuturesOpen(false)} onPick={futuresOverlay ? () => setFuturesOpen(false) : undefined} />
+                ) : null}
+                <div className="composer-dock">
+                  <PromptComposer />
+                </div>
+              </section>
+              <div className="explore-details" hidden={!portalOpen && !inspectorOn}>
+                {portalOpen ? (
+                  <LiveWorkspace
+                    expanded={portalExpanded}
+                    onExpandedChange={setPortalExpanded}
+                    onCollapse={() => {
+                      setPortalOpen(false);
+                      setPortalExpanded(false);
+                    }}
+                  />
+                ) : null}
+                <FutureInspector open={inspectorOpen} onToggle={() => setInspectorOpen(false)} />
               </div>
-              <FutureInspector open={inspectorOpen} onToggle={() => setInspectorOpen(false)} />
               <FirstRun />
             </InspectProvider>
           ) : null}
@@ -165,6 +195,8 @@ function ExploreHeader({ futuresOpen, onFutures }: { futuresOpen: boolean; onFut
     <div className="explore-head">
       <div className="explore-head-copy">
         <p className="brand-kicker">Explore futures</p>
+        <h1>Software Futures</h1>
+        <span className="explore-description">Branch, experiment, and discover new versions.</span>
         <span>
           {timelines.length === 1 ? "1 timeline" : `${timelines.length} timelines`}
           {running ? <span className="inflight"> · {running} generating</span> : null}

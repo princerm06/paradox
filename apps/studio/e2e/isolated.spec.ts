@@ -26,10 +26,94 @@ async function shot(page: Page, name: string) {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` });
 }
 
+test("redesigned Explore keeps panels separated across viewport sizes", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Live · Original")).toBeVisible();
+  await assertBrowserTarget(page);
+  await expect(page.locator(".topbar-brand img")).toHaveJSProperty("naturalWidth", 96);
+  await page.locator(".topbar").getByRole("button", { name: "Inspect" }).click();
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await expect(page.getByRole("heading", { name: "Software Futures" })).toBeVisible();
+    const graph = await page.locator(".graph-host").boundingBox();
+    const composer = await page.locator(".composer-dock").boundingBox();
+    const preview = await page.locator(".portal-float").boundingBox();
+    const inspector = await page.locator(".inspector-float").boundingBox();
+    expect(graph).not.toBeNull();
+    expect(composer!.y).toBeGreaterThanOrEqual(graph!.y + graph!.height - 1);
+    expect(inspector!.y).toBeGreaterThanOrEqual(preview!.y + preview!.height - 1);
+    if (viewport.width > 980) expect(preview!.x).toBeGreaterThanOrEqual(graph!.x + graph!.width - 1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await expect.poll(async () => {
+      const card = await page.locator(".future-node.is-selected").boundingBox();
+      const canvas = await page.locator(".graph-host").boundingBox();
+      return Boolean(card && canvas && card.x >= canvas.x && card.x + card.width <= canvas.x + canvas.width);
+    }).toBe(true);
+    await shot(page, `redesign-${viewport.width}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Expand", exact: true }).click();
+  const expanded = await page.locator(".portal-float").boundingBox();
+  const graph = await page.locator(".graph-host").boundingBox();
+  expect(expanded!.x).toBeGreaterThanOrEqual(graph!.x + graph!.width - 1);
+  await page.getByRole("button", { name: "Shrink", exact: true }).click();
+});
+
 async function engineState(page: Page) {
   const response = await page.request.get(`${ENGINE}/api/timelines`);
   return (await response.json()) as { active_timeline_id: string; timelines: Array<{ id: string; name: string; status: string; is_active: boolean }> };
 }
+
+test("Architect exposes provenance and responsive inspection without mutations", async ({ page }) => {
+  const before = await engineState(page);
+  const mutations: string[] = [];
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (request.url().startsWith(ENGINE) && request.method() !== "GET" && request.method() !== "OPTIONS") mutations.push(request.url());
+  });
+  await page.goto("/#architect");
+  await assertBrowserTarget(page);
+  await expect(page.getByRole("heading", { name: "System Architecture" })).toBeVisible();
+  await expect(page.getByText("System context, not an imported-project topology.")).toBeVisible();
+  await page.getByRole("button", { name: /^Timeline engine,/ }).click();
+  const inspector = page.getByRole("complementary", { name: "Architecture inspector" });
+  await expect(inspector.getByRole("heading", { name: "Timeline engine" })).toBeVisible();
+  await expect(inspector.getByText("GET /api/health", { exact: true })).toBeVisible();
+  await inspector.getByRole("button", { name: "→ Timeline store" }).click();
+  await expect(inspector.getByRole("heading", { name: "Timeline store" })).toBeVisible();
+  await expect(inspector.getByRole("heading", { name: "Timeline store" })).toBeInViewport();
+  await page.getByRole("button", { name: "Fit map" }).click();
+  const initialZoom = await page.getByLabel("Architecture zoom", { exact: true }).textContent();
+  await page.getByRole("button", { name: "Zoom architecture in" }).click();
+  await expect(page.getByLabel("Architecture zoom", { exact: true })).not.toHaveText(initialZoom!);
+  await page.getByRole("button", { name: "Zoom architecture out" }).click();
+  for (const viewport of [{ width: 1440, height: 960 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const cards = await page.locator(".arch-node").evaluateAll((nodes) => nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    }));
+    for (let first = 0; first < cards.length; first++) {
+      for (let second = first + 1; second < cards.length; second++) {
+        const left = cards[first]!;
+        const right = cards[second]!;
+        expect(left.right <= right.left || right.right <= left.left || left.bottom <= right.top || right.bottom <= left.top, "architecture cards must not overlap").toBe(true);
+      }
+    }
+    await shot(page, `architect-${viewport.width}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.getByRole("tab", { name: /^Endpoints/ }).click();
+  await expect(page.getByText("GET /openapi.json", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: /^Changes/ }).click();
+  await expect(page.getByText("Generation records and diffs, without inferred runtime claims.")).toBeVisible();
+  await expect(inspector.getByText("Imported-project topology and architecture comparison")).toBeVisible();
+  expect(mutations).toEqual([]);
+  expect(errors).toEqual([]);
+  expect(await engineState(page)).toEqual(before);
+});
 
 async function generate(page: Page, prompt: string) {
   await page.getByLabel("What would you like to change?").fill(prompt);
@@ -107,6 +191,23 @@ test("full Explore workflow against an isolated engine", async ({ page }) => {
   // 2. Inspect its evidence.
   await page.locator(".submission").getByRole("button", { name: "Inspect" }).click();
   const inspector = page.getByRole("complementary", { name: "Future inspector" });
+  await expect(page.locator(".future-node.is-selected .future-selection")).toHaveText("Selected");
+  await expect(page.locator(".future-node.is-selected .state-live")).toHaveCount(0);
+  await expect(page.locator(".future-node.is-live .state-live")).toHaveText("Live");
+  await expect(page.locator(".future-node.is-selected .future-visual")).toHaveAccessibleName("Application capture unavailable");
+  await page.getByRole("button", { name: "Fit", exact: true }).click();
+  await expect.poll(async () => page.locator(".future-node").evaluateAll((cards) => {
+    const host = document.querySelector(".graph-host")!.getBoundingClientRect();
+    return cards.every((card) => {
+      const rect = card.getBoundingClientRect();
+      return rect.left >= host.left && rect.right <= host.right && rect.top >= host.top && rect.bottom <= host.bottom;
+    });
+  })).toBe(true);
+  const zoom = page.getByLabel("Current zoom", { exact: true });
+  const beforeZoom = Number.parseInt(await zoom.innerText());
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await expect.poll(async () => Number.parseInt(await zoom.innerText())).toBeGreaterThan(beforeZoom);
+  await page.getByRole("button", { name: "Center", exact: true }).click();
   await inspector.getByRole("tab", { name: "Diff" }).click();
   await expect(inspector.getByText("demo_app/ranking.py").first()).toBeVisible();
   await shot(page, "iso-03-inspector-diff");
@@ -178,6 +279,20 @@ test("full Explore workflow against an isolated engine", async ({ page }) => {
   await page.getByRole("button", { name: "Architect" }).click();
   await expect(page.locator(".arch-node-label", { hasText: "Timeline engine" })).toBeVisible();
   await shot(page, "iso-14-architect");
+  await page.getByRole("tab", { name: /^Changes/ }).click();
+  const architecture = page.getByRole("region", { name: "Architecture map" });
+  await architecture.getByRole("button", { name: /^M ranking.py/ }).click();
+  const component = page.getByRole("complementary", { name: "Architecture inspector" });
+  await expect(component.getByText("scripted agent")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const changeMap = await page.locator(".change-map").boundingBox();
+  expect(changeMap!.height).toBeGreaterThan(300);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const panel = await component.boundingBox();
+  const stage = await architecture.boundingBox();
+  expect(panel!.y).toBeGreaterThanOrEqual(stage!.y + stage!.height - 1);
+  await shot(page, "architect-populated-mobile");
+  await page.setViewportSize({ width: 1440, height: 900 });
   expect(JSON.stringify(await engineState(page))).toBe(before);
   // Every generation the browser sent asked for the scripted provider explicitly.
   expect(firewall.generations.map((body) => body.provider)).toEqual(["scripted", "scripted", "scripted"]);
