@@ -66,6 +66,27 @@ def test_bounded_inventory(future, monkeypatch):
         sandbox.protected_files(code, profile)
 
 
+@pytest.mark.parametrize("name", sorted(sandbox.AUTOLOAD))
+@pytest.mark.parametrize("kind", ["directory", "dangling_symlink"])
+def test_ancestor_autoload_rejected_without_reading_contents(future, name, kind):
+    code, profile = future
+    control = code.parent / name
+    if kind == "directory":
+        control.mkdir()
+        (control / "sensitive-config").write_text("must not be read")
+    else:
+        control.symlink_to(code.parent / "missing")
+    with pytest.raises(ValueError, match="ancestor configuration"):
+        sandbox.protected_files(code, profile)
+
+
+def test_ancestor_check_is_bounded(future, monkeypatch):
+    code, profile = future
+    monkeypatch.setattr(sandbox, "MAX_ANCESTORS", 1)
+    with pytest.raises(ValueError, match="ancestor configuration check limit"):
+        sandbox.protected_files(code, profile)
+
+
 def test_non_macos_fail_closed(monkeypatch):
     monkeypatch.setattr(sandbox.sys, "platform", "linux")
     assert "no unsandboxed fallback" in sandbox.availability_reason()

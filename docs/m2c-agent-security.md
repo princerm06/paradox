@@ -41,6 +41,13 @@ write-denied. Existing protected files and their ancestor directories cannot be
 overwritten, removed, atomically replaced, or renamed by the agent. New tests can
 be added. Post-generation immutable/bytecode/diff guards remain mandatory.
 
+Fixed autoload names are also checked by metadata only at **every canonical cwd
+ancestor**, capped at 64. Any existing entry or dangling symlink fails closed;
+contents are never opened. Consequently a state path under a home containing
+`~/.codex` or `~/.claude` may be unavailable: imported Droid currently requires a
+dedicated state path with clean ancestors. This conservative compatibility gate is
+not proof of every SDK/CLI autoload behavior, and is not relaxed by operator opt-in.
+
 Only the future code, a private Factory directory and scratch directory are
 writable. Agent operational state lives under a per-user 0700 system-temp directory,
 keyed by the canonical future-code path hash, **outside** the entire generation and
@@ -74,6 +81,12 @@ enforcement before SDK initialization. The demo uses its unchanged existing poli
   validation, preview and activation credential tests are required integration gates.
   Trusted SDK detached-descendant behavior still needs explicit review; the runtime
   single-process guarantee must not be misrepresented as an agent-tree guarantee.
+- The trusted supervisor previously skipped session cleanup when the root already
+  exited, or stopped after the root handled TERM, leaving same-session children.
+  It now always TERM/KILLs the known child session group. Disposable TERM-resistant
+  mock-agent descendants are stopped on completion, cancellation, timeout, and
+  engine-liveness EOF. This does not prove cleanup of deliberately detached SDK
+  descendants; no runtime fork restriction is weakened to accommodate the agent.
 
 No frontend, desktop artifact, real repository, paid provider, push or merge is part
 of this helper implementation. Offline tests use disposable files and dummy keys.

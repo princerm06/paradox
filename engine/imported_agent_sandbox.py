@@ -23,6 +23,7 @@ CONTROL = frozenset({"agents.md", "conftest.py", "pytest.ini", ".pytest.ini", "t
                      "pyproject.toml", "sitecustomize.py", "usercustomize.py"})
 MAX_PATHS = 4096
 MAX_BYTES = 16 * 1024 * 1024
+MAX_ANCESTORS = 64
 
 
 def _root(code):
@@ -43,6 +44,16 @@ def _relative(value):
 
 def protected_files(code, profile):
     code = _root(code)
+    ancestors = code.parents
+    if len(ancestors) > MAX_ANCESTORS:
+        raise ValueError("Agent path exceeds the ancestor configuration check limit")
+    for ancestor in ancestors:
+        for name in sorted(AUTOLOAD):
+            try:
+                (ancestor / name).lstat()
+            except FileNotFoundError:
+                continue
+            raise ValueError("Agent ancestor configuration is unsupported; use an isolated state path with clean ancestors")
     if profile.adapter != "fastapi-sqlite-v1" or profile.execution != "sandboxed":
         raise ValueError("Imported agent requires the sandboxed FastAPI/SQLite adapter")
     if not profile.protected_tests_prefix.endswith("/") or not _relative(profile.protected_tests_prefix[:-1]):
