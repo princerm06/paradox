@@ -91,11 +91,51 @@ npm --prefix engine/droid_adapter test
 .venv/bin/python -m pytest -q tests/test_project_generation_profiles.py tests/test_project_generation_validation.py
 ```
 
-Still required before M2-C offline GO: trusted-agent process-group cleanup review
-and its adversarial regressions, final combined offline regression and security
-handoff. No real-provider readiness is implied by mocked HTTP success.
+The trusted supervisor now terminates the child session's process group even
+when its root has already exited. Same-session TERM-resistant SDK descendants
+are covered for completion, cancel, timeout and engine-liveness EOF. This is
+not a guarantee for an agent that deliberately detaches into a different session;
+the imported application's stronger single-process restriction is unchanged.
+
+Still required before M2-C offline GO: final combined offline regression and
+security handoff. No real-provider readiness is implied by mocked HTTP success.
+
+## Configuration compatibility restriction
+
+Imported-agent preparation checks at most 64 canonical ancestor directories for
+the fixed `.factory`, `.claude`, `.agents`, `.codex`, and `.mcp.json` names using
+metadata only. Any existing entry, including a dangling symlink, fails closed;
+contents are not opened. Existing autoload/config entries inside future code
+are also rejected at every depth. A state directory underneath a home containing
+`~/.codex` or `~/.claude` can therefore be unusable for imported Droid even if
+the SDK would not actually load that entry. Use a dedicated isolated engine
+state location with clean ancestors. This deliberate conservative limitation
+does not affect scripted generation or prove every possible CLI configuration
+mechanism disabled. The SDK's `mcpServers: []` is not claimed to disable hooks
+or all ancestor configuration by itself.
 
 Before separately authorized live verification: review ancestor configuration,
 hooks/skills/MCP autoload and trusted-agent cleanup; verify actual effective
 tool availability, real editing and recorded usage. The historical successful
 demo run-3 evidence is unchanged and is not evidence of imported-project support.
+
+## Read permissions are not a confidentiality boundary
+
+Offline review of the installed, pinned SDK's `dist/node.mjs`
+`setupClientHandlers` and `DroidClient.handlePermissionRequest` shows that the
+SDK forwards permission events to our handler. It does not install a read-path
+interceptor around the CLI. The exported `ToolConfirmationType` in
+`dist/index-*.d.ts` has edit/create/apply_patch and sandbox-violation types, but
+no separate Read/Grep/Glob confirmation types. This does not establish that every
+read invokes a callback. The full catalog gate checks tool availability, not
+per-read access mediation.
+
+The trusted-agent sandbox deliberately permits broad host reads and provider
+networking. Therefore future-only writes and private operational HOME do **not**
+prove future-only reads or protection from model-driven disclosure of host files
+or the agent's own session/auth artifacts. Private operational artifacts are
+outside untrusted application/test read roots and are removed on completion and
+recovery; this protects the runtime boundary, not confidentiality against the
+trusted agent itself. Do not offer real-user-repository or host-secret read
+isolation based on this implementation. A separate read-confined design would
+require approval and compatibility testing; it is not silently substituted here.
