@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
-import sys
 import threading
 import time
 from uuid import uuid4
@@ -15,7 +14,7 @@ from engine.providers import Providers
 from engine.service import Conflict, Unavailable
 from engine.storage import copy_tree, now
 from engine.adapters.base import DEMO_PROFILE
-from engine.validation import TEST_BOOTSTRAP, baseline_test_count, changes, files, guard, reject_bytecode, require_test_success, test_counts, validate_runtime, validation_run
+from engine.validation import baseline_test_count, changes, compile_command, files, guard, pytest_command, reject_bytecode, require_test_success, test_counts, validate_runtime, validation_run
 
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
@@ -185,7 +184,7 @@ class Generations:
             passed("guard", started)
             stage = "compile"
             started = time.monotonic()
-            result = validation_run([sys.executable, "-m", "compileall", "-q", *profile.compile_paths], code, directory, control, validation_log, profile)
+            result = validation_run(compile_command(profile), code, directory, control, validation_log, profile)
             if result:
                 raise RuntimeError("Python compilation failed; inspect validation logs")
             passed("compile", started)
@@ -194,7 +193,8 @@ class Generations:
             expected_tests = baseline_test_count(directory, base, control, validation_log, profile)
             report = directory / f"tests-{uuid4().hex}.xml"
             fixture_code = directory / "baseline-collection" if profile.execution == "sandboxed" else base / "code"
-            result = validation_run([sys.executable, "-c", TEST_BOOTSTRAP, str(fixture_code / profile.tests / "conftest.py"), "-", "-q", "--noconftest", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(code), profile.tests, "--junitxml", str(report)], code, directory, control, validation_log, profile, report)
+            command = pytest_command(code, fixture_code / profile.tests / "conftest.py", "-", ["-q", "--noconftest", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(code), profile.tests, "--junitxml", str(report)], profile)
+            result = validation_run(command, code, directory, control, validation_log, profile, report)
             evaluation["tests"] = test_counts(report)
             self.update(generation_id, evaluation=evaluation)
             require_test_success(result, evaluation["tests"], expected_tests)

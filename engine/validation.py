@@ -42,6 +42,30 @@ raise SystemExit(pytest.main(sys.argv[3:], plugins=plugins))
 """
 
 
+ISOLATED_BOOTSTRAP = """
+import os
+import sys
+sys.pycache_prefix = os.environ['PYTHONPYCACHEPREFIX']
+import compileall
+import pytest
+import xml.etree.ElementTree
+sys.path.append(os.getcwd())
+"""
+
+
+def compile_command(profile=DEMO_PROFILE):
+    if profile.execution == "sandboxed":
+        return [sys.executable, "-I", "-c", ISOLATED_BOOTSTRAP + "\nraise SystemExit(0 if compileall.main() else 1)", "-q", *profile.compile_paths]
+    return [sys.executable, "-m", "compileall", "-q", *profile.compile_paths]
+
+
+def pytest_command(code, fixture, report, arguments, profile=DEMO_PROFILE):
+    if profile.execution == "sandboxed":
+        return [sys.executable, "-I", "-c", ISOLATED_BOOTSTRAP + TEST_BOOTSTRAP,
+                str(fixture), str(report), "--confcutdir", str(code), "--import-mode=append", *arguments]
+    return [sys.executable, "-c", TEST_BOOTSTRAP, str(fixture), str(report), *arguments]
+
+
 def reject_bytecode(root):
     for path in root.rglob("*"):
         if path.name.lower() == "__pycache__" or path.suffix.lower() == ".pyc":
@@ -140,11 +164,11 @@ def baseline_test_count(directory, base, control, log, profile=DEMO_PROFILE):
     copy_tree(base / "code", code)
     report = directory / f"collection-{uuid4().hex}.json"
     fixture_code = code if profile.execution == "sandboxed" else base / "code"
-    result = validation_run([
-        sys.executable, "-c", TEST_BOOTSTRAP, str(fixture_code / profile.tests / "conftest.py"),
-        str(report), "--collect-only", "-q", "--noconftest", "-p", "no:cacheprovider",
+    command = pytest_command(code, fixture_code / profile.tests / "conftest.py", report, [
+        "--collect-only", "-q", "--noconftest", "-p", "no:cacheprovider",
         "-c", os.devnull, "--rootdir", str(code), profile.tests,
-    ], code, directory, control, log, profile, report, "baseline-test-state")
+    ], profile)
+    result = validation_run(command, code, directory, control, log, profile, report, "baseline-test-state")
     if result:
         raise ValueError("Immutable baseline test collection failed; inspect validation logs")
     require_regular_report(report)

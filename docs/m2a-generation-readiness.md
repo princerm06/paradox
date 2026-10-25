@@ -2,13 +2,13 @@
 
 ## Baseline and implementation gate
 
-M1 is integration-ready at backend `7c79aa6`; analyzer verification and the final
-handoff were committed as `1922c03` and carried onto this branch as `8f0e01c`.
-This separate branch is `feat/repository-generation-m2a`.
+M1 is integration-ready at backend `7c79aa6`. This separate branch is
+`feat/repository-generation-m2a`, rebased onto Codex 2's complete `f4fa14e`
+baseline, including its credential-boundary fixes and tests.
 
 Claude published the frozen contract at `c639ba2`, with additive credential gate
-`69a8123`. This branch carries exact copies of the interface/contract and the
-reviewed runtime profile plumbing from Codex 2's `f4fa14e`. No external runtime
+`69a8123` and isolated-validation clarification `ffca84a`. This branch inherits
+the reviewed runtime profile plumbing from Codex 2's `f4fa14e`. No external runtime
 has been started: imported execution remains gated on the credential fix merging
 and Claude reviewing Codex 2's execution sandbox. No Factory key is used.
 
@@ -86,16 +86,25 @@ state outside imported roots. No project imports occur during preparation.
 | Original revision differs from current M1 analysis | Revalidate imported committed copy before any execution |
 | Explicit Droid request | Reject before a job/paid call; no silent provider fallback |
 
-## Remaining contract questions
+## Validation bootstrap and review gates
 
-- Confirm private `PYTHONPYCACHEPREFIX` for compileall, because code must remain
-  read-only during imported-project validation.
-- Confirm sandbox wrapper writable directory/file semantics and environment
-  preparation: interpreter/site-packages, private scratch, report paths, and
-  no inherited engine/native tokens.
-- Confirm the final adapter/sandbox ownership transfer and shared-method split.
-- Clarify imported nested baseline conftest handling without enabling arbitrary
-  pytest configuration or generated plugin hooks.
+Imported compile, collection and tests use `python -I`, import trusted tooling
+before appending the private code root, and use pytest's `--import-mode=append`.
+They explicitly set `sys.pycache_prefix` from the private tmp path because `-I`
+ignores Python environment configuration. Imported pytest additionally uses
+`--confcutdir <code>` to avoid ancestor discovery outside the sandbox. Demo argv
+is unchanged. Baseline conftest is staged inside the generation run root.
+
+Focused profile/bootstrap tests: 29 passed in 2.47 seconds. Trusted synthetic
+shadow probes verify real compilation, actual failing-test results and collection
+counts without executing the notes application. They are not sandbox or imported
+runtime acceptance evidence. The pre-rebase full run was stopped: it does not
+count toward the required rebased full-suite gate.
+
+Sandbox helper review, launcher `-I` integration, credential-fix merge and project
+lifecycle integration remain prerequisites for imported execution. Tests execute
+in-process with pytest; hostile application code could still forge test reports.
+Validation is evidence, not the security boundary; the OS sandbox is that boundary.
 
 Step 1 profile refactoring and deterministic fixture preparation are implemented
 for review. Imported execution is still **NO-GO** pending the independent
