@@ -1,6 +1,6 @@
 # Projects M2 contract: alternate futures for an imported repository
 
-Status: **frozen v1** (2026-10-24), after review by Codex 1 and Codex 2. Base is M1 at `feat/local-repository-m1` @ 7c79aa6. Changes need agreement from all three. Not to be confused with `m2-generation.md`, the earlier demo milestone. That contract and every route in it stay exactly as they are.
+Status: **frozen v1** (2026-10-24), after review by Codex 1 and Codex 2. **v1.1** (2026-10-24): single-process execution clarification and the open P1 record. Base is M1 at `feat/local-repository-m1` @ 7c79aa6. Changes need agreement from all three. Not to be confused with `m2-generation.md`, the earlier demo milestone. That contract and every route in it stay exactly as they are.
 
 ## Goal
 
@@ -153,6 +153,20 @@ Verified by Claude on 2026-10-24 (macOS, CLT Python 3.9, engine venv). pytest pa
 - **Home read-deny.** Verified with the rules above: pytest and uvicorn ran normally, and `compileall` with `PYTHONPYCACHEPREFIX` left no `.pyc` in `code/`. Reads of `~/.zshrc`, `~/Library/Keychains` and the Paradox checkout returned `PermissionError`.
 
 Import evidence (same date): with a `.gitattributes` smudge filter configured, `git archive HEAD` **ran the filter**, which wrote a marker. `ls-tree` plus `cat-file --batch` did not.
+
+### Clarification v1.1: single-process execution (2026-10-24)
+
+Agreed after the detached-child finding on 8e66728: an imported app could `Popen(..., start_new_session=True)` and the child survived `Engine.close()`, still writing its former future's state. `killpg` only reaches the original process group.
+
+- The imported-project profile adds `(deny process-fork)`. M2 supports **single-process** FastAPI/SQLite apps only: uvicorn without `--workers`/reload, in-process pytest, no subprocess spawning from app or test code.
+- This **supersedes** the earlier positive requirement that a sandboxed parent can signal a sandboxed child. `(deny signal)` with `(allow signal (target same-sandbox))` stays.
+- Every sandboxed process is started by the trusted supervisor (`engine/runtime_supervisor.py`) in its own session. Close, switch, revoke, cancel and engine death terminate and reap it, and a SIGTERM-ignoring writer is killed before state is copied or restored.
+- Also in the profile, beyond the original text above: `(deny mach-lookup)`, `(deny user-preference-read)`, `(deny process-info*)` except self, and `(deny sysctl-read)` except `kern.ostype`, `kern.hostname`, `kern.osrelease`, `kern.version`, `hw.machine`, `hw.ncpu`. Consequence: no DNS inside the sandbox; apps must use `127.0.0.1`.
+- **Required tests:** `Popen(start_new_session=True)`, `os.fork` and `posix_spawn` from app and test code are denied; a fixture with a SIGTERM-ignoring writer leaves no process and no late write after close/switch/revoke.
+- Multi-process apps need a whole-sandbox process supervisor and a new contract revision.
+
+The agent (Droid) sandbox for imported projects is a separate profile, specified in `docs/m2c-agent-security.md` (PR #27). It must not relax anything in this section.
+
 
 ## HTTP API
 
@@ -330,3 +344,31 @@ Each step is a separate local branch, reviewed by Claude. Nothing merges without
 | P1 | Dependency mismatch between the project and the engine venv | Preflight blocks; no installs in M2 |
 | P1 | Long-lived preview runtimes | At most one open project; closed on shutdown |
 | P2 | Large repositories | Import caps |
+
+### Open P1: unsandboxed demo code can read the engine's launch environment (recorded 2026-10-24, not in M2 scope)
+
+**Status:** open, documented, not scheduled. Expanding M2 scope needs the user's approval.
+
+**What:** the bundled demo profile is `trusted_local`. The live runtime and the validation runs (compile, pytest, boot) execute generated `demo_app` code unsandboxed, as the user's uid. Such code can read the engine process's **exec-time** environment via `sysctl KERN_PROCARGS2` or `ps eww <engine pid>`.
+- PR #25 removes *inheritance* into child environments, which is still required.
+- PR #25 cannot change the engine's own exec-time environment block. Neither can removing values from `os.environ` later.
+
+**Exposure today:**
+
+| Setup | Secrets in the engine environment | Who generates code |
+|---|---|---|
+| Browser demo (documented setup) | `PARADOX_TOKEN` only; keyless engine, no `FACTORY_API_KEY` | Scripted recipes (our fixtures) |
+| Desktop | `PARADOX_TOKEN` and `PARADOX_SHELL_TOKEN`; keyless | Scripted |
+| Paid Droid runs, user-started with `FACTORY_API_KEY` in the engine env | `FACTORY_API_KEY` | Model-written code, which then runs unsandboxed in validation and live runtime |
+
+So the realistic risk is the paid Droid path: model-written code could read the Factory key. On the desktop, the shell token could also be read once the picker ships.
+
+**Recommended smallest remediation.** Two independent pieces, each small:
+1. **Keep secrets out of the engine's exec environment.** The engine reads them once at startup from **stdin**, as one JSON line, and the launcher closes the pipe.
+   - The desktop shell already owns stdin for its death-pipe, so it would need a small protocol change.
+   - For the browser demo, a documented wrapper pipes the values in.
+   - `FACTORY_API_KEY` is instead fetched from the macOS Keychain only at Droid-run time and placed **only** in the Droid subprocess env. That child is already write-sandboxed, but it is not read- or sysctl-sandboxed.
+   - Touches: `engine/__main__.py` or startup, `engine/providers.py` (Droid key source), the desktop launcher, the demo checklist. No API or schema change.
+2. **Later, separately:** run the demo's validation and runtime under the reviewed `exec_sandbox` as well (a `sandboxed` DEMO profile). This closes the class entirely, but changes demo runtime behaviour, so it needs a full Gate A and desktop re-verification.
+
+Until then: **no paid Droid generations with the key in the engine environment** unless the user explicitly accepts this exposure, and the desktop picker does not ship before item 1, or before the user explicitly accepts the risk.
