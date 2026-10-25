@@ -97,8 +97,30 @@ are covered for completion, cancel, timeout and engine-liveness EOF. This is
 not a guarantee for an agent that deliberately detaches into a different session;
 the imported application's stronger single-process restriction is unchanged.
 
-Still required before M2-C offline GO: final combined offline regression and
-security handoff. No real-provider readiness is implied by mocked HTTP success.
+## Final offline gate
+
+Source `0ede14e73f1ef3168ce3920552dca01bc857523d` passed the combined Python
+suite: **561 passed, 1 skipped, 1 deselected in 754.33 seconds**, return code 0.
+The sole skip was the opt-in long scripted rehearsal. The sole deselection was
+the paid live-Droid test. The durable runner used an allowlisted environment
+with no provider/engine credentials, scripted as its outer default, and only
+dummy keys inside explicit mocked-SDK fixtures. JUnit contains no failures or
+errors. The exact exclusion was
+`-k 'not test_live_droid_generation_records_a_complete_result'`.
+
+Independent focused verification on the same source passed **89 tests in 113.68
+seconds**: imported kernel confinement, trusted-agent group cleanup, all nine
+HTTP/mock-SDK cases, provider and opt-in boundaries, runtime credential handling
+and runtime security. The Node suite separately passed **78 tests**. No real
+Factory session or model turn ran.
+
+Verdict: **GO for review of the disposable-project, mocked-SDK implementation**.
+**NO-GO for a real-provider verification run** until the user separately approves
+it and reviews the confidentiality/configuration/cleanup limitations below.
+Offline success is not a claim of real-model effectiveness, actual credits,
+arbitrary-framework support or production-grade hostile-agent isolation.
+No merge is authorized. Subsequent changes to this report are documentation only;
+the full-suite result remains attributed to the exact source SHA above.
 
 ## Configuration compatibility restriction
 
@@ -139,3 +161,9 @@ recovery; this protects the runtime boundary, not confidentiality against the
 trusted agent itself. Do not offer real-user-repository or host-secret read
 isolation based on this implementation. A separate read-confined design would
 require approval and compatibility testing; it is not silently substituted here.
+
+The installed SDK's `node.mjs` `prepareSpawn` merges `process.env` with configured
+environment before sanitization, reinforcing the need for our scrubbed agent
+environment. `invokeNodeSpawn` passes cwd/env/stdio (and optional serialization)
+without `detached: true`. This supports same-session cleanup for the SDK's direct
+CLI child, but is not proof that the CLI binary can never detach another helper.
