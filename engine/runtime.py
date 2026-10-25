@@ -8,17 +8,19 @@ import time
 
 import httpx
 
+from engine.adapters.base import DEMO_PROFILE, ProjectProfile
 from engine.jobs import scrubbed_environment
 
 
 class Runtime:
-    def __init__(self, root: Path, port: int = 8001, environment=None, control=None):
+    def __init__(self, root: Path, port: int = 8001, environment=None, control=None, profile: ProjectProfile = DEMO_PROFILE):
         self.root = root
         self.port = port
         self.process = None
         self.log = None
         self.environment = environment
         self.control = control
+        self.profile = profile
 
     @property
     def running(self):
@@ -29,6 +31,8 @@ class Runtime:
         return f"http://127.0.0.1:{self.port}"
 
     def start(self):
+        if self.profile.execution != "trusted_local" or self.profile.adapter != DEMO_PROFILE.adapter:
+            raise RuntimeError("Imported project execution requires the reviewed execution sandbox")
         if self.running:
             return
         listener = socket.socket()
@@ -41,20 +45,20 @@ class Runtime:
             for name in ("FACTORY_API_KEY", "PARADOX_TOKEN", "PARADOX_SHELL_TOKEN", "ANTHROPIC_API_KEY"):
                 environment.pop(name, None)
             environment.pop("PYTHONPATH", None)
-            environment.update(
-                PARADOX_APP_DIR=str(self.root / "workspace" / "state"),
-                PYTHONDONTWRITEBYTECODE="1",
-                PYTHONUNBUFFERED="1",
-            )
+            environment.update({
+                self.profile.state_env: str(self.root / "workspace" / "state"),
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONUNBUFFERED": "1",
+            })
             self.log = (self.root / "runtime.log").open("ab")
             launcher = (
                 "import os,runpy,sys,threading; "
                 "threading.Thread(target=lambda: (sys.stdin.buffer.read(), os._exit(0)), daemon=True).start(); "
-                "sys.argv=['uvicorn','demo_app.main:app','--fd',sys.argv[1],'--log-level','warning']; "
+                "sys.argv=['uvicorn',sys.argv[2],'--fd',sys.argv[1],'--log-level','warning']; "
                 "runpy.run_module('uvicorn',run_name='__main__')"
             )
             self.process = subprocess.Popen(
-                [sys.executable, "-c", launcher, str(listener.fileno())],
+                [sys.executable, "-c", launcher, str(listener.fileno()), self.profile.app],
                 cwd=self.root / "workspace" / "code",
                 env=environment,
                 stdin=subprocess.PIPE,
@@ -78,7 +82,7 @@ class Runtime:
                     if not self.running:
                         raise RuntimeError("Application exited; inspect runtime.log")
                     try:
-                        response = client.get(self.url + "/health")
+                        response = client.get(self.url + self.profile.health_path)
                         if response.status_code == 200 and self.running:
                             return
                     except httpx.HTTPError:

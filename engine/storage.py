@@ -1,9 +1,12 @@
+from contextlib import closing
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
 import sqlite3
 from uuid import uuid4
+
+from engine.adapters.base import DEMO_PROFILE, ProjectProfile
 
 
 def now():
@@ -20,8 +23,9 @@ def copy_tree(source: Path, destination: Path):
 
 
 class Storage:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, profile: ProjectProfile = DEMO_PROFILE):
         self.root = root
+        self.profile = profile
         self.workspace = root / "workspace"
         self.snapshots = root / "snapshots"
         self.snapshots.mkdir(exist_ok=True)
@@ -78,11 +82,17 @@ class Storage:
         destination = self.snapshots / snapshot_id
         try:
             copy_tree(self.workspace, temporary)
-            database = self.workspace / "state" / "app.sqlite3"
-            if database.exists():
-                target = temporary / "state" / "app.sqlite3"
+            state = self.workspace / "state"
+            for pattern in self.profile.sqlite_state_globs:
+                if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+                    raise ValueError("SQLite state patterns must stay within the state directory")
+            databases = sorted({path for pattern in self.profile.sqlite_state_globs for path in state.glob(pattern)})
+            for database in databases:
+                if not database.is_file():
+                    raise ValueError("Declared SQLite state must be a regular file")
+                target = temporary / "state" / database.relative_to(state)
                 target.unlink(missing_ok=True)
-                with sqlite3.connect(database) as source, sqlite3.connect(target) as output:
+                with closing(sqlite3.connect(database)) as source, closing(sqlite3.connect(target)) as output:
                     source.backup(output)
                 for suffix in ("-wal", "-shm", "-journal"):
                     Path(str(target) + suffix).unlink(missing_ok=True)
@@ -112,10 +122,13 @@ class Storage:
         temporary.rename(self.workspace)
 
     def initialize_workspace(self, demo_source):
+        if self.profile.adapter != DEMO_PROFILE.adapter:
+            raise ValueError("Imported projects require adapter-managed workspace initialization")
         self.workspace.mkdir(exist_ok=True)
         code = self.workspace / "code"
         code.mkdir(exist_ok=True)
-        copy_tree(demo_source, code / "demo_app")
+        package = self.profile.app.split(":", 1)[0].split(".", 1)[0]
+        copy_tree(demo_source, code / package)
         state = self.workspace / "state"
         state.mkdir()
         initial = demo_source / "behavior.json"

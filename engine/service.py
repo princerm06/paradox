@@ -5,6 +5,7 @@ import shutil
 import threading
 from uuid import uuid4
 
+from engine.adapters.base import DEMO_PROFILE, ProjectProfile
 from engine.runtime import Runtime
 from engine.storage import Storage
 
@@ -31,13 +32,14 @@ class Gate:
 
 
 class Engine:
-    def __init__(self, root: Path, demo_source: Path, runtime_port: int):
+    def __init__(self, root: Path, demo_source: Path, runtime_port: int, profile: ProjectProfile = DEMO_PROFILE):
         self.root = root.resolve()
         self.demo_source = demo_source.resolve()
         self.gate = Gate()
         self.lock_file = None
         self.storage = None
-        self.runtime = Runtime(self.root, runtime_port)
+        self.profile = profile
+        self.runtime = Runtime(self.root, runtime_port, profile=profile)
 
     @property
     def active_id(self):
@@ -58,7 +60,7 @@ class Engine:
             self.lock_file = None
             raise RuntimeError("State directory is already owned by another engine")
         try:
-            self.storage = Storage(self.root)
+            self.storage = Storage(self.root, profile=self.profile)
             if self.active_id is None:
                 with self.storage.connection:
                     self.storage.connection.execute("DELETE FROM snapshots")
@@ -73,9 +75,12 @@ class Engine:
                     self.storage.set_setting("active_id", timeline_id)
             else:
                 recovery = self.storage.setting("transition")
-                database = self.storage.workspace / "state" / "app.sqlite3"
-                missing_database = not database.is_file() or database.stat().st_size == 0
-                if recovery or missing_database or not (self.storage.workspace / "code" / "demo_app" / "main.py").is_file():
+                state = self.storage.workspace / "state"
+                required_databases = [state / pattern for pattern in self.profile.sqlite_state_globs if not any(character in pattern for character in "*?[")]
+                missing_database = any(not path.is_file() or path.stat().st_size == 0 for path in required_databases)
+                module = self.storage.workspace / "code" / Path(*self.profile.app.split(":", 1)[0].split("."))
+                missing_module = not module.with_suffix(".py").is_file() and not (module / "__init__.py").is_file()
+                if recovery or missing_database or missing_module:
                     marker = json.loads(recovery) if recovery else {}
                     snapshot_id = marker.get("snapshot_id") or self.storage.timeline(self.active_id)["snapshot_id"]
                     self.storage.restore(snapshot_id)
@@ -135,9 +140,12 @@ class Engine:
                 target_id = child_id
                 self.storage.restore(parent_snapshot)
                 if modification == "popular_feed":
-                    ranking = self.storage.workspace / "code" / "demo_app" / "ranking.py"
+                    if self.profile.adapter != DEMO_PROFILE.adapter:
+                        raise ValueError("The popular_feed modification is only supported by the bundled demo")
+                    package = self.profile.app.split(":", 1)[0].split(".", 1)[0]
+                    ranking = self.storage.workspace / "code" / package / "ranking.py"
                     if not ranking.is_file():
-                        raise ValueError("Demo source must expose demo_app/ranking.py")
+                        raise ValueError("Demo source must expose " + package + "/ranking.py")
                     template = Path(__file__).with_name("templates") / "popular_ranking.py"
                     ranking.write_bytes(template.read_bytes())
             else:
