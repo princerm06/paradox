@@ -201,12 +201,43 @@ production remains exact `f8fdf67`; only this report and the A-owned HTTP tests
 changed. Log: `.venv/m2a-final-http-security-delta.log`. The new tests do not
 cover the validation-job `setsid()` finding described below.
 
+## Independent validation-supervisor review
+
+B committed the validation-job correction as `291f97b`. Only the A-owned
+additive test/report commit was rebased onto it, producing combined source
+`3c3a783`; B's reviewed commits were not rewritten or copied. JobControl now
+uses the same isolated trusted stdlib supervisor as Runtime. The command is a
+session leader and does not inherit the engine-death descriptor. The trusted
+supervisor remains outside sandboxed application control, enforces TERM/KILL
+cleanup, and reaps the command after cancellation, timeout or engine death.
+Trusted jobs retain stdin and subprocess support; the new process-creation
+restriction applies to wrapped imported execution, not the engine or agents.
+
+Independent exact-`3c3a783` selection: sandbox, isolated-launcher, Runtime,
+hostile timeline activation/restore, and actual source-SQLite generation/reopen:
+**62 passed in 88.08 seconds**, zero expected failures. This includes the
+re-exec/ignore-TERM writer's failed setsid/setpgid escape attempts, stable state
+after cancellation and timeout, and real engine-death cleanup. The trusted
+stdin/subprocess positive control also passed. Log:
+`.venv/m2a-job-supervision-review.log`. No new independent security objection
+was found in this review; it does not constitute a proof against all possible
+hostile native code or replace the final combined regression gate.
+
+The separate profile/provider/guard and real validation/worker selection at the
+same `3c3a783` also passed: **40 passed in 28.52 seconds**. It covers baseline
+collection, compile/test/guard failures, protected manifests/tests, tooling
+shadowing, credential absence, cancellation, real boot/smoke and durable future
+adoption/state restoration. Together these two non-overlapping selections give
+**102 independently passing focused tests** on the combined committed source.
+Log: `.venv/m2a-final-generation-validation.log`. The latter invocation also
+explicitly unset `OPENAI_API_KEY` and the optional long-generation test flag.
+
 ## Exact remaining dependency and verdict
 
-**M2-A scripted generation and project HTTP workflow: focused GO at `8e66728`.
-Runtime single-process security slice: independently passing at `f8fdf67`.
-Overall M2: NO-GO pending the separate validation-job session escape fix and
-final combined regression/review gate. Focused results are not merge approval.**
+**M2-A workflow and single-process supervision: focused GO at `3c3a783`.
+Both known lifecycle findings have committed corrections and independently
+passing focused regressions. Overall M2 completion awaits B's final combined
+full offline result at `3c3a783`. This is not merge or distribution approval.**
 
 Codex 2 reported a separate disposable adversarial reproduction on `8e66728`:
 an imported app launched the approved Python interpreter with
@@ -220,13 +251,11 @@ The approved single-process policy and independently tested Runtime supervision
 address that original Runtime path. B then reported a distinct validation-job
 gap: a sandboxed validation process can call `setsid()` without creating a child,
 escape the trusted job launcher's process group, and survive group-only
-cancellation/timeout. The Runtime app is already a session leader; the existing
-JobControl child is not. B owns the internal `jobs.py` supervision correction
-under the approved hardening scope, with no A interface changes. A has not
-independently rerun that new reproduction. No overall GO is claimed until the
-committed fix proves cancellation, timeout and engine-death cleanup for a
-re-exec/setsid state writer and passes the final combined regression gate. Any
-full-suite count on `f8fdf67` predates that correction.
+cancellation/timeout. The Runtime app was already a session leader; the earlier
+JobControl child was not. B's `291f97b` internal supervision correction and the
+independent review above address that second finding without changing A
+interfaces. Full-suite counts on `f8fdf67` predate that correction and must not
+be used as its final verification evidence.
 
 Mirrored project routes require explicit project open; GET does not implicitly
 start imported code. The lanes agreed to reuse frozen `409 project_busy` for a
