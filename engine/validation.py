@@ -1,4 +1,5 @@
 import difflib
+import fnmatch
 import io
 import json
 import os
@@ -15,6 +16,7 @@ import httpx
 from engine.jobs import log_line, scrubbed_environment
 from engine.runtime import Runtime
 from engine.storage import copy_tree
+from engine.adapters.base import DEMO_PROFILE
 
 
 TEST_BOOTSTRAP = """
@@ -77,7 +79,7 @@ def changes(base, current):
     return {"files": records}, "".join(patches)
 
 
-def guard(base, current, changed):
+def guard(base, current, changed, profile=DEMO_PROFILE):
     paths = [item["path"] for item in changed["files"]]
     if not paths:
         raise ValueError("Agent made no code changes")
@@ -94,12 +96,13 @@ def guard(base, current, changed):
                     raise ValueError("pytest_plugins declarations are not allowed: " + path)
             except (tokenize.TokenError, IndentationError, SyntaxError):
                 pass
-        if not path.startswith("demo_app/"):
-            raise ValueError("Changes outside demo_app/ are not allowed")
-        if path == "demo_app/AGENTS.md":
-            raise ValueError("demo_app/AGENTS.md is immutable")
-        if path.startswith("demo_app/tests/") and path in base:
-            raise ValueError("Existing demo_app/tests files are immutable")
+        if not any(path.startswith(prefix) for prefix in profile.editable_prefixes):
+            raise ValueError("Changes outside the project's editable paths are not allowed")
+        if any(fnmatch.fnmatchcase(path if "/" in pattern else Path(path).name, pattern)
+               for pattern in profile.immutable_paths):
+            raise ValueError(path + " is immutable")
+        if path.startswith(profile.protected_tests_prefix) and path in base:
+            raise ValueError("Existing " + profile.protected_tests_prefix + " files are immutable")
 
 
 def require_regular_report(report):
@@ -111,17 +114,37 @@ def require_regular_report(report):
         raise ValueError("Test report must be a regular file, not a symlink: " + report.name)
 
 
-def baseline_test_count(directory, base, control, log):
+def validation_run(command, code, directory, control, log, profile, report=None, state_name="test-state"):
+    environment = scrubbed_environment()
+    environment[profile.state_env] = str(directory / state_name)
+    if profile.execution == "sandboxed":
+        from engine.adapters import exec_sandbox
+
+        state = directory / state_name
+        temporary = directory / (state_name + "-tmp")
+        state.mkdir(exist_ok=True)
+        temporary.mkdir(exist_ok=True)
+        writable = [state, temporary]
+        if report is not None:
+            report.touch(exist_ok=False)
+            writable.append(report)
+        environment = exec_sandbox.environment(environment, temporary)
+        command = exec_sandbox.wrap(command, writable, directory)
+    elif profile.execution != "trusted_local" or profile.adapter != DEMO_PROFILE.adapter:
+        raise ValueError("Imported validation requires the execution sandbox")
+    return control.run(command, code, log, 120, environment=environment)
+
+
+def baseline_test_count(directory, base, control, log, profile=DEMO_PROFILE):
     code = directory / "baseline-collection"
     copy_tree(base / "code", code)
     report = directory / f"collection-{uuid4().hex}.json"
-    environment = scrubbed_environment()
-    environment["PARADOX_APP_DIR"] = str(directory / "baseline-test-state")
-    result = control.run([
-        sys.executable, "-c", TEST_BOOTSTRAP, str(base / "code/demo_app/tests/conftest.py"),
+    fixture_code = code if profile.execution == "sandboxed" else base / "code"
+    result = validation_run([
+        sys.executable, "-c", TEST_BOOTSTRAP, str(fixture_code / profile.tests / "conftest.py"),
         str(report), "--collect-only", "-q", "--noconftest", "-p", "no:cacheprovider",
-        "-c", os.devnull, "--rootdir", str(code), "demo_app/tests",
-    ], code, log, 120, environment=environment)
+        "-c", os.devnull, "--rootdir", str(code), profile.tests,
+    ], code, directory, control, log, profile, report, "baseline-test-state")
     if result:
         raise ValueError("Immutable baseline test collection failed; inspect validation logs")
     require_regular_report(report)
@@ -167,13 +190,13 @@ def require_test_success(result, counts, expected):
         raise ValueError(f"Test report missing or incomplete: {executed} executed, expected at least {expected}")
 
 
-def validate_runtime(directory, code, base_state, control, log, record_check):
+def validate_runtime(directory, code, base_state, control, log, record_check, profile=DEMO_PROFILE):
     root = directory / "validation-runtime"
     root.mkdir()
     (root / "workspace").mkdir()
     copy_tree(code, root / "workspace" / "code")
     copy_tree(base_state, root / "workspace" / "state")
-    runtime = Runtime(root, port=0, environment=scrubbed_environment(), control=control)
+    runtime = Runtime(root, port=0, environment=scrubbed_environment(), control=control, profile=profile)
     started = time.monotonic()
     try:
         runtime.start()
@@ -182,12 +205,12 @@ def validate_runtime(directory, code, base_state, control, log, record_check):
         started = time.monotonic()
         control.check()
         with httpx.Client(timeout=5, trust_env=False) as client:
-            for path in ("/health", "/api/posts"):
+            for path in profile.smoke_paths:
                 response = client.get(runtime.url + path)
                 if response.status_code != 200:
                     raise RuntimeError(f"GET {path} returned {response.status_code}")
                 log_line(log, f"GET {path} 200")
-        record_check("smoke", started, "GET /health 200, GET /api/posts 200")
+        record_check("smoke", started, ", ".join("GET " + path + " 200" for path in profile.smoke_paths))
         return boot_ms
     finally:
         runtime.stop()

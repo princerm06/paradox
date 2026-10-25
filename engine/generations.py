@@ -10,11 +10,12 @@ import threading
 import time
 from uuid import uuid4
 
-from engine.jobs import Cancelled, JobControl, log_line, redact, scrubbed_environment
+from engine.jobs import Cancelled, JobControl, log_line, redact
 from engine.providers import Providers
 from engine.service import Conflict, Unavailable
 from engine.storage import copy_tree, now
-from engine.validation import TEST_BOOTSTRAP, baseline_test_count, changes, files, guard, reject_bytecode, require_test_success, test_counts, validate_runtime
+from engine.adapters.base import DEMO_PROFILE
+from engine.validation import TEST_BOOTSTRAP, baseline_test_count, changes, files, guard, reject_bytecode, require_test_success, test_counts, validate_runtime, validation_run
 
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
@@ -129,6 +130,7 @@ class Generations:
         return (self.root / generation_id / "diff.patch").read_text(encoding="utf-8", errors="replace")
 
     def run(self, generation_id):
+        profile = getattr(self.engine, "profile", DEMO_PROFILE)
         control = self.controls[generation_id]
         directory = self.root / generation_id
         validation_log = directory / "validation.log"
@@ -163,7 +165,8 @@ class Generations:
             stage = "agent"
             started = time.monotonic()
             self.update(generation_id, status="generating")
-            agent = self.providers.run(generation["provider"], generation["prompt"], code, control, directory / "agent.log")
+            arguments = (generation["provider"], generation["prompt"], code, control, directory / "agent.log")
+            agent = self.providers.run(*arguments) if profile == DEMO_PROFILE else self.providers.run(*arguments, profile)
             self.update(generation_id, agent=agent)
             if agent["exit_code"] != 0:
                 detail = agent.get("summary") or "inspect agent logs"
@@ -178,28 +181,27 @@ class Generations:
             changed, patch = changes(base_files, current_files)
             self.update(generation_id, changes=changed)
             (directory / "diff.patch").write_text(patch, encoding="utf-8")
-            guard(base_files, current_files, changed)
+            guard(base_files, current_files, changed, profile)
             passed("guard", started)
             stage = "compile"
             started = time.monotonic()
-            result = control.run([sys.executable, "-m", "compileall", "-q", "demo_app"], code, validation_log, 120)
+            result = validation_run([sys.executable, "-m", "compileall", "-q", *profile.compile_paths], code, directory, control, validation_log, profile)
             if result:
                 raise RuntimeError("Python compilation failed; inspect validation logs")
             passed("compile", started)
             stage = "tests"
             started = time.monotonic()
-            expected_tests = baseline_test_count(directory, base, control, validation_log)
+            expected_tests = baseline_test_count(directory, base, control, validation_log, profile)
             report = directory / f"tests-{uuid4().hex}.xml"
-            test_environment = scrubbed_environment()
-            test_environment["PARADOX_APP_DIR"] = str(directory / "test-state")
-            result = control.run([sys.executable, "-c", TEST_BOOTSTRAP, str(base / "code/demo_app/tests/conftest.py"), "-", "-q", "--noconftest", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(code), "demo_app/tests", "--junitxml", str(report)], code, validation_log, 120, environment=test_environment)
+            fixture_code = directory / "baseline-collection" if profile.execution == "sandboxed" else base / "code"
+            result = validation_run([sys.executable, "-c", TEST_BOOTSTRAP, str(fixture_code / profile.tests / "conftest.py"), "-", "-q", "--noconftest", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(code), profile.tests, "--junitxml", str(report)], code, directory, control, validation_log, profile, report)
             evaluation["tests"] = test_counts(report)
             self.update(generation_id, evaluation=evaluation)
             require_test_success(result, evaluation["tests"], expected_tests)
             passed("tests", started, f"{evaluation['tests']['passed']} passed")
             stage = "boot"
             started = time.monotonic()
-            evaluation["boot_ms"] = validate_runtime(directory, code, base / "state", control, validation_log, passed)
+            evaluation["boot_ms"] = validate_runtime(directory, code, base / "state", control, validation_log, passed, profile)
             control.check()
             final_files = files(code)
             if final_files != current_files:

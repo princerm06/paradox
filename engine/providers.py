@@ -8,6 +8,7 @@ import time
 
 from engine.jobs import log_line, redact, scrubbed_environment
 from engine import droid_sandbox
+from engine.adapters.base import DEMO_PROFILE
 
 
 ADAPTER = Path(__file__).with_name("droid_adapter") / "dist" / "adapter.js"
@@ -56,14 +57,28 @@ class Providers:
     def listing(self):
         return {"default": self.default, "providers": [self.availability(name) for name in ("droid", "scripted", "claude")]}
 
-    def run(self, provider, prompt, code, control, log):
+    def run(self, provider, prompt, code, control, log, profile=DEMO_PROFILE):
         if provider not in {"scripted", "droid"}:
             raise ValueError("Unknown or disabled agent provider: " + provider)
+        if provider not in profile.providers:
+            raise ValueError("Agent provider is not permitted for this project: " + provider)
         started = time.monotonic()
         if provider == "scripted":
             recipe = None
-            for path in sorted(self.recipes.glob("*.json")):
+            recipes = self.recipes
+            if profile.adapter != DEMO_PROFILE.adapter and (recipes / "projects").is_dir():
+                recipes = recipes / "projects"
+            for path in sorted(recipes.glob("*.json")):
                 candidate = json.loads(path.read_text())
+                if candidate.get("adapter", DEMO_PROFILE.adapter) != profile.adapter:
+                    continue
+                required = candidate.get("requires", [])
+                if not isinstance(required, list) or any(not isinstance(relative, str) or not relative or
+                        Path(relative).is_absolute() or ".." in Path(relative).parts or "\\" in relative
+                        for relative in required):
+                    raise ValueError("Recipe requirements must be relative workspace paths")
+                if any(not (code / relative).is_file() or (code / relative).is_symlink() for relative in required):
+                    continue
                 if str(candidate["match"]).lower() in prompt.lower():
                     recipe = candidate
                     break
