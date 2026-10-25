@@ -151,13 +151,52 @@ State and SQLite findings are **static evidence only**. Analysis does not prove 
 
 ## Desktop shell (Claude)
 
-- **IPC:** one Tauri command, `select_repository`, callable only from the main window at `http://localhost:5190`, through a capability that lists exactly that command. The page gets no dialog, filesystem or shell plugin permissions.
-- **What the command does:**
-  1. opens the native folder picker (Rust side)
-  2. canonicalises the chosen path
-  3. sends `POST /api/repositories` to its own engine, with the bearer token and the shell token
-  4. returns `RepositorySummary`, or a cancellation or error, to the page
-- **Browser mode** has no picker. The studio lists the repositories from `GET /api/repositories` (startup configuration only).
+Implemented on `feat/desktop-repo-picker` (verified in a real WKWebView).
+
+### Trust boundary
+
+| Secret or capability | Holder | The page sees it? |
+|---|---|---|
+| `PARADOX_TOKEN` (bearer), random 48 hex per launch | Rust shell, engine env, page `localStorage["paradox.token:http://127.0.0.1:8100"]` | Yes, so the page can call the API |
+| `PARADOX_SHELL_TOKEN`, random 48 hex per launch | Rust shell memory and engine env **only** | **No** |
+| Choosing a filesystem path | Native NSOpenPanel in Rust | No: the page cannot send a path that registers |
+| Tauri IPC | Exactly one command, `select_repository`, main window only, origin `http://localhost:5190` | Dialog, fs and shell plugins all denied |
+
+The engine runs as a child process with a cleared environment: no `FACTORY_API_KEY`, `PARADOX_AGENT=scripted`, and state in `~/Library/Application Support/dev.paradox.desktop-poc/state`.
+
+### Command
+
+```ts
+const result = await window.__TAURI_INTERNALS__.invoke("select_repository"); // no arguments
+```
+
+The page never passes arguments. Results:
+
+| Result | Meaning |
+|---|---|
+| `{cancelled: true}` | The user closed the dialog |
+| `{cancelled: false, already_registered: false, repository: RepositorySummary}` | Engine returned 201 |
+| `{cancelled: false, already_registered: true, repository: RepositorySummary}` | Engine returned 409. The shell looks up the existing registration by canonical root. |
+| **rejects** with a string | Engine `detail.message` (e.g. "This directory cannot be registered"), "the selected folder is not accessible", or "the engine is not reachable" |
+
+What the shell does:
+1. Opens NSOpenPanel and canonicalises the chosen path (`realpath`).
+2. Sends `POST /api/repositories {"path": <canonical>}` to `127.0.0.1:8100` over HTTP/1.0, with `Authorization: Bearer` and `X-Paradox-Shell-Token`.
+3. Passes the engine's verdict through. All path-safety rules (root, home, state dir, checkout, Git top level) are enforced by the engine, not the shell.
+
+### Verified (2026-10-24, debug selftest in WKWebView)
+- First pick: 201. Second pick of the same folder: `already_registered: true`, same id.
+- The page's own `POST /api/repositories` with the bearer but no shell token: **403**.
+- `plugin:dialog|open`: denied. `plugin:fs|*` and `plugin:shell|*`: "Plugin not found".
+- The picked repository is byte-identical afterwards.
+
+### Out of scope until M2
+- `trust_repository`: same pattern, adds a native confirmation (see `m2-projects.md`).
+- Forgetting a repository from the desktop (DELETE needs the shell token; no command yet).
+- **Browser mode** has no picker. The studio lists repositories from `GET /api/repositories` (startup configuration only).
+
+### Precondition
+The engine runtime must not inherit `PARADOX_SHELL_TOKEN` (P0 found 2026-10-24: the live demo runtime inherits the engine environment). The picker ships only after that fix merges.
 
 ## Studio (Prince)
 
@@ -165,6 +204,13 @@ State and SQLite findings are **static evidence only**. Analysis does not prove 
 - **Then, in both modes:** list repositories, inspect one, show the Inspection (git status, structure, analysis status and diagnostics), and optionally validate.
 - **No free-text path input.**
 - **Every `/api/repositories` call sends the bearer token,** GET included. This differs from the existing GET routes.
+- **Exact request and response examples, error codes and persistence behaviour:** `docs/m1-repositories-api.md` on `feat/local-repository-m1` (PR #24).
+- **Error shapes differ by layer:**
+  - repository errors: `{"detail": {"code", "message"}}`
+  - auth and Origin errors: `{"detail": "string"}`
+  - schema errors: FastAPI's 422 array
+
+  Branch on HTTP status first, then on `detail.code` when it is an object.
 
 ## Merge order
 
