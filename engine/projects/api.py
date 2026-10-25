@@ -1,3 +1,4 @@
+import os
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -88,12 +89,16 @@ def project_router(projects, authorize, authorize_shell):
     @router.get("/{pid}/agents")
     def agents(pid: str):
         with projects.session(pid) as (engine, generations):
-            return {"default": "scripted", "providers": [generations.providers.availability("scripted")]}
+            return {"default": "scripted", "providers": [
+                generations.providers.availability(provider, profile=engine.profile)
+                for provider in engine.profile.providers]}
 
     @router.post("/{pid}/generations", status_code=202, response_model=Generation)
     def generate(pid: str, body: GenerationRequest):
-        if body.provider != "scripted":
-            raise RepositoryError("provider_unsupported", "Imported projects require explicit provider=scripted")
+        if body.provider not in ("scripted", "droid"):
+            raise RepositoryError("provider_unsupported", "Imported projects require explicit provider=scripted or droid")
+        if body.provider == "droid" and os.environ.get("PARADOX_IMPORTED_DROID_ENABLED") != "1":
+            raise RepositoryError("provider_unsupported", "Imported Droid requires explicit operator opt-in; paid calls require separate approval")
         with projects.session(pid) as (engine, generations):
             return generations.create(body.parent_id, body.prompt, body.name, body.provider, body.activate_on_success)
 

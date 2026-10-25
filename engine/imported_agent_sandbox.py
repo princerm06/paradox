@@ -19,7 +19,7 @@ EXECUTABLE = Path("/usr/bin/sandbox-exec")
 MARKER = "macos-project-write-v1"
 AUTOLOAD = frozenset({".factory", ".claude", ".agents", ".codex", ".mcp.json"})
 FORBIDDEN = AUTOLOAD | {".git", "node_modules"}
-CONTROL = frozenset({"conftest.py", "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg",
+CONTROL = frozenset({"agents.md", "conftest.py", "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg",
                      "pyproject.toml", "sitecustomize.py", "usercustomize.py"})
 MAX_PATHS = 4096
 MAX_BYTES = 16 * 1024 * 1024

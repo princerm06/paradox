@@ -31,6 +31,12 @@ def test_protected_inventory(future):
         "pkg/requirements-dev.txt", "requirements.txt", "tests/conftest.py", "tests/test_original.py")
 
 
+def test_instruction_files_are_protected_case_insensitively(future):
+    code, profile = future
+    (code / "pkg" / "AGENTS.md").write_text("frozen instructions")
+    assert "pkg/AGENTS.md" in sandbox.protected_files(code, profile)
+
+
 @pytest.mark.parametrize("name", sorted(sandbox.FORBIDDEN))
 def test_control_autoload_rejected(future, name):
     code, profile = future
@@ -126,7 +132,7 @@ raise SystemExit(9)
 
 
 @macos
-@pytest.mark.parametrize("attack", ["direct", "hardlink", "symlink", "state", "control", "upper_control", "hook"])
+@pytest.mark.parametrize("attack", ["direct", "hardlink", "symlink", "state", "control", "upper_control", "hook", "instructions"])
 def test_source_state_and_new_control_paths_not_writable(future, tmp_path, attack):
     code, profile = future
     outside = tmp_path / "source.sqlite3"
@@ -145,6 +151,7 @@ try:
   Path('pkg/.factory/settings.json').write_text('attacker')
  elif sys.argv[1]=='upper_control': Path('pkg/.MCP.JSON').write_text('attacker')
  elif sys.argv[1]=='hook': Path('pkg/custom.pth').write_text('attacker')
+ elif sys.argv[1]=='instructions': Path('pkg/AGENTS.md').write_text('attacker')
  elif sys.argv[1]=='hardlink':
   os.link(source,'escape')
   Path('escape').write_text('attacker')

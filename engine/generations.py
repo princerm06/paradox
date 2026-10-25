@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from engine.jobs import Cancelled, JobControl, log_line, redact
 from engine.providers import Providers
@@ -41,6 +41,15 @@ class Generations:
         self.connection.execute("CREATE TABLE IF NOT EXISTS generations (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
         self.connection.commit()
         for generation in self.listing():
+            if getattr(self.engine, "profile", DEMO_PROFILE).execution == "sandboxed" and generation["provider"] == "droid":
+                from engine.imported_agent_sandbox import cleanup
+
+                identifier = generation["id"]
+                if str(UUID(identifier)) != identifier:
+                    raise ValueError("Invalid persisted generation identifier")
+                code = self.root / identifier / "workspace" / "code"
+                if code.exists() or code.is_symlink():
+                    cleanup(code)
             if generation["status"] not in TERMINAL:
                 self.update(generation["id"], status="failed", finished_at=now(), error={"stage": "engine", "message": "Engine restarted before generation completed"})
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="fork-generation")
@@ -79,10 +88,14 @@ class Generations:
             return generation
 
     def create(self, parent_id, prompt, name, provider, activate_on_success):
+        profile = getattr(self.engine, "profile", DEMO_PROFILE)
+        if profile != DEMO_PROFILE and provider is None:
+            raise InvalidGeneration("Imported projects require an explicit agent provider")
         provider = provider or self.providers.default
         with self.engine.gate:
             self.engine.require_available(parent_id)
-        availability = self.providers.availability(provider)
+        availability = (self.providers.availability(provider) if profile == DEMO_PROFILE
+                        else self.providers.availability(provider, profile=profile))
         if not availability["available"]:
             raise InvalidGeneration(f"Agent provider '{provider}' is unavailable: {availability['reason']}")
         generation_id = str(uuid4())

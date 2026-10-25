@@ -38,7 +38,7 @@ def test_profile_and_static_preflight_do_not_execute(code):
     result = ADAPTER.preflight(code, profile)
     assert result.ok, result.diagnostics
     assert profile.execution == "sandboxed"
-    assert profile.providers == ("scripted",)
+    assert profile.providers == ("scripted", "droid")
     assert profile.sqlite_state_globs == ("**/*.sqlite3", "**/*.sqlite", "**/*.db")
     assert profile.compile_paths == ("notes_app",)
     assert profile.protected_tests_prefix == "tests/"
