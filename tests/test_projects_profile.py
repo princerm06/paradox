@@ -92,13 +92,14 @@ def ready():
     ("fastapi-sqlite-v1", "trusted_local"),
     ("demo-v0", "unknown"),
 ])
-def test_runtime_fails_closed_for_unimplemented_execution_profiles(tmp_path, monkeypatch, adapter, execution):
+def test_runtime_fails_closed_for_unavailable_execution_profiles(tmp_path, monkeypatch, adapter, execution):
     def forbidden_spawn(*arguments, **keywords):
         raise AssertionError("Unsupported profile must not launch code")
 
     monkeypatch.setattr("engine.runtime.subprocess.Popen", forbidden_spawn)
+    monkeypatch.setattr("engine.runtime.exec_sandbox.availability_reason", lambda: "unavailable")
     runtime = Runtime(tmp_path, port=0, profile=replace(DEMO_PROFILE, adapter=adapter, execution=execution))
-    with pytest.raises(RuntimeError, match="reviewed execution sandbox"):
+    with pytest.raises(RuntimeError, match="execution_sandbox_unavailable"):
         runtime.start()
     assert not runtime.running
     assert runtime.log is None
@@ -110,9 +111,9 @@ def test_engine_cannot_initialize_an_imported_project_as_the_demo(tmp_path, monk
         raise AssertionError("Imported project must not execute during the demo-only refactor")
 
     monkeypatch.setattr("engine.runtime.subprocess.Popen", forbidden_spawn)
-    profile = replace(DEMO_PROFILE, adapter="fastapi-sqlite-v1", execution="sandboxed")
+    profile = replace(DEMO_PROFILE, adapter="unsupported", execution="sandboxed")
     engine = Engine(tmp_path, SOURCE, 0, profile=profile)
-    with pytest.raises(ValueError, match="adapter-managed workspace initialization"):
+    with pytest.raises(ValueError, match="Unsupported imported project profile"):
         engine.start()
     assert engine.storage is None
     assert engine.lock_file is None

@@ -71,11 +71,16 @@ class Runtime:
             command = [sys.executable, "-c", launcher, str(listener.fileno()), self.profile.app]
             if sandboxed:
                 workspace = self.root / "workspace"
+                for stale in workspace.glob(".runtime-*"):
+                    if stale.is_symlink() or not stale.is_dir():
+                        stale.unlink()
+                    else:
+                        shutil.rmtree(stale)
                 self.temporary = Path(tempfile.mkdtemp(prefix=".runtime-", dir=workspace)).resolve()
                 environment = exec_sandbox.environment(environment, self.temporary)
                 launcher = (
-                    "import os,sys,threading; sys.pycache_prefix=sys.argv[3]; import uvicorn; "
-                    "threading.Thread(target=lambda: (os.read(0,1), os._exit(0)), daemon=True).start(); "
+                    "import os,sys,threading,signal; sys.pycache_prefix=sys.argv[3]; import uvicorn; "
+                    "threading.Thread(target=lambda: (os.read(0,1), os.killpg(os.getpgrp(),signal.SIGKILL)), daemon=True).start(); "
                     "sys.path.append(os.getcwd()); "
                     "uvicorn.run(sys.argv[2],fd=int(sys.argv[1]),log_level='warning',access_log=False)"
                 )

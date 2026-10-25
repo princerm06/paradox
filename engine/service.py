@@ -39,6 +39,7 @@ class Engine:
         self.lock_file = None
         self.storage = None
         self.profile = profile
+        self.execution_guard = lambda: None
         self.runtime = Runtime(self.root, runtime_port, profile=profile)
 
     @property
@@ -51,6 +52,7 @@ class Engine:
         return timeline
 
     def start(self):
+        self.require_execution()
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock_file = (self.root / "engine.lock").open("a+")
         try:
@@ -109,10 +111,14 @@ class Engine:
                 self.lock_file = None
 
     def require_available(self, timeline_id):
+        self.require_execution()
         timeline = self.storage.timeline(timeline_id)
         if timeline["status"] == "declined":
             raise Conflict("Declined timelines cannot be activated or changed")
         return timeline
+
+    def require_execution(self):
+        self.execution_guard()
 
     def checkpoint(self):
         self.runtime.stop()

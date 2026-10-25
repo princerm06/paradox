@@ -240,6 +240,7 @@ class Generations:
             temporary.rename(destination)
             with self.engine.gate:
                 control.check()
+                self.engine.require_execution()
                 generation = self.get(generation_id)
                 self.engine.require_available(generation["parent_id"])
                 outgoing = None
