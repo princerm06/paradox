@@ -1,8 +1,9 @@
 # M2-C agent security integration
 
-Status: implementation and offline verification in progress. No real Factory call
-is authorized or proved by these tests. Scripted M2 remains separately reviewable
-in PR #26; this work does not change its tested revision.
+Status: **GO for offline mocked-SDK integration on disposable fixtures;
+NO-GO for real-provider/user-repository verification.** No real Factory call is
+authorized or proved by these tests. Scripted M2 remains separately reviewable in
+PR #26; this work does not change its tested revision.
 
 ## Boundaries
 
@@ -90,3 +91,41 @@ enforcement before SDK initialization. The demo uses its unchanged existing poli
 
 No frontend, desktop artifact, real repository, paid provider, push or merge is part
 of this helper implementation. Offline tests use disposable files and dummy keys.
+
+## Final offline gate
+
+Exact combined production/test source:
+`0ede14e73f1ef3168ce3920552dca01bc857523d`. Both lanes are included by Git ancestry,
+not copied files. This report is an additive documentation-only change.
+
+- Full backend regression: **561 passed, 1 skipped, 1 deselected in 754.33 seconds**;
+  JUnit records 562 cases, zero errors, zero failures, one skip. Durable runner rc 0.
+- The skip is `tests/e2e/test_long_generation.py:13`, the opt-in four-minute scripted
+  rehearsal. The sole deselection is
+  `test_live_droid_generation_records_a_complete_result`, deliberately excluded.
+- Node adapter: **78 passed**, with SDK dependency installation from the offline
+  npm cache. Tests inject a mocked session, not a real provider turn.
+- Security/helper/ancestor/recovery/launcher slice: **54 passed in 6.83 seconds**
+  on `85ca77f` (same production/test tree as the final combined source).
+- Independent B HTTP/mock-provider, runtime credential and runtime-security slice:
+  **25 passed in 102.81 seconds** on that same tree. Earlier focused counts overlap;
+  they are not added together to inflate the final full-suite count.
+
+The full runner uses an allowlisted environment, with no provider/engine/shell keys,
+`PARADOX_AGENT=scripted`, and explicit live-test exclusion. Individual tests set
+dummy credentials and explicitly select mocked Droid. It verifies real sandboxed
+compile/tests/runtime, immutable source/Git/source-SQLite fingerprints, permission
+denials, cancellation, private state cleanup and durable recovery.
+
+Durable local evidence: `/tmp/paradox-m2c-offline-full.log`,
+`/tmp/paradox-m2c-offline-full.xml`, `/tmp/paradox-m2c-offline-status.json`.
+
+Before a separately authorized real-provider run, resolve the trusted agent's
+broad host/private-auth-artifact read disclosure risk and validate CLI lifecycle /
+autoload behavior in an explicitly isolated environment. Pinned SDK 0.10.0's
+`invokeNodeSpawn` uses cwd/env/stdio without `detached: true`; this source review
+does not prove that the separate CLI binary cannot create detached descendants.
+Retain user-approved disposable-project scope, review the exact effective tools
+and model, obtain explicit external-transmission/cost approval, and collect actual
+diffs, permissions, validation, usage and cleanup evidence. No mock success should
+be described as genuine AI-provider verification or final product completion.
