@@ -32,7 +32,7 @@ export default defineConfig({
       url: E2E_STUDIO,
       reuseExistingServer: false,
       timeout: 60_000,
-      env: { VITE_PARADOX_API_BASE: E2E_ENGINE, VITE_PARADOX_SAFE_PROVIDER: "1" },
+      env: { VITE_PARADOX_API_BASE: E2E_ENGINE },
     },
   ],
   use: {

@@ -1,0 +1,374 @@
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+from fastapi.testclient import TestClient
+import pytest
+
+from engine.api import create_app
+from engine import droid_sandbox
+from engine.repositories.git import Git, RepositoryError
+from engine.repositories.registry import Registry
+from engine.repositories.inspection import inspect as inspect_repository
+
+
+def git(root, *args):
+    return subprocess.run(["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
+                          check=True, capture_output=True, env={"PATH": "/usr/bin:/bin", "HOME": str(root)})
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = tmp_path / "example"
+    root.mkdir()
+    git(root, "init", "-b", "main")
+    (root / "pkg").mkdir()
+    (root / "pkg/__init__.py").touch()
+    (root / "pkg/main.py").write_text('from fastapi import FastAPI\nfrom pathlib import Path\nimport os, sqlite3\napp=FastAPI()\nstate=Path(os.environ["PARADOX_APP_DIR"])\ndatabase=state / "app.sqlite3"\ndef connection(): return sqlite3.connect(str(database))\n@app.get("/health")\ndef health(): return {"status":"ok"}\n')
+    (root / "tests").mkdir()
+    (root / "tests/test_app.py").write_text("def test_app(): assert True\n")
+    (root / "requirements.txt").write_text("fastapi\nuvicorn\npytest\n")
+    git(root, "add", ".")
+    git(root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
+    return root.resolve()
+
+
+def supported(root, files):
+    return {"schema": "paradox.project-analysis/v1", "status": "supported", "adapter": "fastapi-sqlite-v1",
+            "runtime": {"language": "python", "framework": "fastapi", "python_requires": None}, "dependencies": [],
+            "candidates": {"app": [{"target": "pkg.main:app", "path": "pkg/main.py", "evidence": []}],
+                           "tests": [{"path": "tests"}], "health": [{"path": "/health", "source": "pkg/main.py"}],
+                           "state": [{"kind": "sqlite", "path": None, "env": "PARADOX_APP_DIR"}]}, "diagnostics": []}
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
+    monkeypatch.setenv("PARADOX_SHELL_TOKEN", "test-shell")
+    monkeypatch.delenv("FACTORY_API_KEY", raising=False)
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", supported)
+    with TestClient(create_app(state_dir=tmp_path / "engine", runtime_port=0)) as connection:
+        yield connection
+
+
+AUTH = {"Authorization": "Bearer test-bearer"}
+SHELL = {**AUTH, "X-Paradox-Shell-Token": "test-shell"}
+
+
+def register(client, repo):
+    response = client.post("/api/repositories", json={"path": str(repo)}, headers=SHELL)
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def tree(root):
+    return {str(path.relative_to(root)): (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in root.rglob("*") if path.is_file()}
+
+
+def test_discovery_validation_and_forget_are_read_only(client, repo):
+    before = tree(repo)
+    repository_id = register(client, repo)
+    response = client.post(f"/api/repositories/{repository_id}/inspect", json={}, headers=AUTH)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["git"]["branch"] == "main" and not result["git"]["dirty"]
+    assert result["files"]["tracked_count"] == 4
+    assert result["structure"] == [{"path": "pkg", "kind": "dir"}, {"path": "requirements.txt", "kind": "file"}, {"path": "tests", "kind": "dir"}]
+    validation = client.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
+    assert validation.status_code == 200 and validation.json()["valid"], validation.text
+    assert validation.json()["configuration"]["state_env"] == "PARADOX_APP_DIR"
+    duplicate = client.post("/api/repositories", json={"path": str(repo)}, headers=SHELL)
+    assert duplicate.status_code == 409 and repository_id in duplicate.text
+    assert client.delete(f"/api/repositories/{repository_id}", headers=SHELL).status_code == 204
+    assert client.post(f"/api/repositories/{repository_id}/inspect", json={}, headers=AUTH).status_code == 404
+    assert tree(repo) == before
+
+
+@pytest.mark.parametrize("headers,expected", [({}, 401), (AUTH, 403), ({**AUTH, "X-Paradox-Shell-Token": "wrong"}, 403), ({**SHELL, "Origin": "https://evil.example"}, 403)])
+def test_registration_requires_bearer_shell_and_allowed_origin(client, repo, headers, expected):
+    assert client.post("/api/repositories", json={"path": str(repo)}, headers=headers).status_code == expected
+    assert client.get("/api/repositories").status_code == 401
+
+
+def test_no_token_or_shell_config_is_fail_closed(tmp_path, monkeypatch, repo):
+    monkeypatch.delenv("PARADOX_TOKEN", raising=False)
+    monkeypatch.delenv("PARADOX_SHELL_TOKEN", raising=False)
+    app = create_app(state_dir=tmp_path / "state", runtime_port=0)
+    with TestClient(app) as client:
+        assert client.get("/api/repositories", headers=AUTH).status_code == 401
+    monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
+    with TestClient(create_app(state_dir=tmp_path / "state2", runtime_port=0)) as client:
+        assert client.post("/api/repositories", json={"path": str(repo)}, headers=AUTH).status_code == 403
+
+
+@pytest.mark.parametrize("path", ["relative", "/tmp/../tmp", "/", str(Path.home())])
+def test_unsafe_paths_rejected(client, path):
+    assert client.post("/api/repositories", json={"path": path}, headers=SHELL).status_code == 400
+
+
+def test_invalid_nonroot_and_state_paths_rejected(client, tmp_path, repo):
+    invalid = tmp_path / "not-a-repository"
+    invalid.mkdir()
+    for path in (invalid, repo / "pkg"):
+        assert client.post("/api/repositories", json={"path": str(path)}, headers=SHELL).status_code == 422
+    assert client.post("/api/repositories", json={"path": str(tmp_path / "engine")}, headers=SHELL).status_code == 400
+    checkout = Path(__file__).resolve().parents[1]
+    assert client.post("/api/repositories", json={"path": str(checkout)}, headers=SHELL).status_code == 400
+
+
+def test_dirty_detached_unborn_and_unusual_filenames(repo):
+    (repo / "pkg/main.py").write_text("changed\n")
+    (repo / "new space ☃.txt").write_text("new\n")
+    git(repo, "add", "new space ☃.txt")
+    (repo / "untracked.txt").touch()
+    result, files = Git().inspect(repo)
+    assert result["dirty"] and result["staged"] == result["unstaged"] == result["untracked"] == 1
+    assert "new space ☃.txt" in files
+    git(repo, "checkout", "--detach")
+    assert Git().inspect(repo)[0]["detached"]
+
+
+def test_malicious_fsmonitor_does_not_execute_or_refresh_index(repo, tmp_path):
+    marker = repo / "EXECUTED"
+    script = tmp_path / "monitor.sh"
+    script.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\n')
+    script.chmod(0o700)
+    git(repo, "config", "core.fsmonitor", str(script))
+    git(repo, "config", "diff.external", str(script))
+    before = tree(repo)
+    Git().inspect(repo)
+    assert not marker.exists()
+    assert tree(repo) == before
+
+
+def test_missing_sandbox_is_fail_closed(repo, monkeypatch):
+    monkeypatch.setattr(droid_sandbox, "availability_reason", lambda: "unavailable")
+    with pytest.raises(RepositoryError) as error:
+        Git().inspect(repo)
+    assert error.value.status == 503
+
+
+def test_clean_filter_cannot_execute_repository_scripts(repo, tmp_path):
+    script = tmp_path / "filter.sh"
+    marker = repo / "FILTER_EXECUTED"
+    script.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\ncat\nexit 0\n')
+    script.chmod(0o700)
+    git(repo, "config", "filter.evil.clean", str(script))
+    git(repo, "config", "filter.evil.required", "true")
+    (repo / ".gitattributes").write_text("*.py filter=evil\n")
+    (repo / "pkg/main.py").write_text("modified content\n")
+    with pytest.raises(RepositoryError):
+        Git().inspect(repo)
+    assert not marker.exists()
+
+
+def test_unborn_repository_and_untracked_files_are_inspectable(tmp_path):
+    root = tmp_path / "unborn"
+    root.mkdir()
+    git(root, "init", "-b", "main")
+    (root / "README.md").write_text("new project")
+    result, tracked = Git().inspect(root.resolve())
+    assert result["head"] is None and result["branch"] == "main" and not result["detached"]
+    assert result["untracked"] == 1 and tracked == []
+
+
+def test_unsupported_analysis_cannot_validate(client, repo, monkeypatch):
+    def unsupported(root, files):
+        result = supported(root, files)
+        result.update(status="unsupported", adapter=None)
+        return result
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", unsupported)
+    repository_id = register(client, repo)
+    response = client.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
+    assert not response.json()["valid"]
+
+
+def test_analysis_error_cannot_be_overridden_by_configuration(client, repo, monkeypatch):
+    def incomplete(root, files):
+        result = supported(root, files)
+        result["status"] = "requires_configuration"
+        result["diagnostics"] = [{"code": "fastapi_dependency_missing", "severity": "error", "message": "Missing dependency", "path": None}]
+        return result
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", incomplete)
+    repository_id = register(client, repo)
+    response = client.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
+    assert not response.json()["valid"]
+
+
+def test_capture_enforces_streaming_output_cap():
+    with pytest.raises(RepositoryError) as error:
+        Git().capture([sys.executable, "-c", "import sys;sys.stdout.write('x'*(5*1024*1024))"], {"PATH": "/usr/bin:/bin"})
+    assert error.value.code == "repository_too_large"
+
+
+def test_git_metadata_redirects_are_rejected(repo, tmp_path):
+    (repo / ".git/commondir").write_text(str(tmp_path))
+    with pytest.raises(RepositoryError) as error:
+        Git().inspect(repo)
+    assert error.value.code == "unsupported_git_layout"
+
+
+def test_real_analyzer_discovery_and_validation(repo, tmp_path, monkeypatch):
+    pytest.importorskip("engine.project_analysis")
+    monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
+    monkeypatch.setenv("PARADOX_SHELL_TOKEN", "test-shell")
+    before = tree(repo)
+    with TestClient(create_app(state_dir=tmp_path / "integration-state", runtime_port=0)) as connection:
+        repository_id = register(connection, repo)
+        result = connection.post(f"/api/repositories/{repository_id}/inspect", json={}, headers=AUTH)
+        assert result.json()["analysis"]["status"] == "supported", result.text
+        result = connection.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
+        assert result.json()["valid"], result.text
+        assert result.json()["configuration"]["app"] == "pkg.main:app"
+        assert result.json()["configuration"]["state_env"] == "PARADOX_APP_DIR"
+        (repo / "requirements.txt").write_text("pytest\n")
+        result = connection.post(f"/api/repositories/{repository_id}/validate", json={}, headers=AUTH)
+        assert not result.json()["valid"], result.text
+        assert any(item["code"] == "dirty_working_tree" for item in result.json()["diagnostics"])
+    before.pop("requirements.txt")
+    after = tree(repo)
+    after.pop("requirements.txt")
+    assert after == before
+
+
+@pytest.mark.parametrize("changes", [{"tests": "../outside"}, {"working_dir": "/tmp"}, {"app": "other.main:app"}, {"health_path": "/missing"}])
+def test_unsafe_or_unsupported_configuration_is_invalid(client, repo, changes):
+    repository_id = register(client, repo)
+    configuration = {"adapter": "fastapi-sqlite-v1", "app": "pkg.main:app", "state_env": "PARADOX_APP_DIR", **changes}
+    response = client.post(f"/api/repositories/{repository_id}/validate", json={"configuration": configuration}, headers=AUTH)
+    assert response.status_code == 200 and not response.json()["valid"], response.text
+
+
+def test_arbitrary_commands_forbidden_and_raw_paths_not_page_routes(client, repo):
+    repository_id = register(client, repo)
+    response = client.post(f"/api/repositories/{repository_id}/validate", json={"configuration": {
+        "adapter": "fastapi-sqlite-v1", "app": "pkg.main:app", "state_env": "PARADOX_APP_DIR", "start": "touch dangerous"}}, headers=AUTH)
+    assert response.status_code == 422
+    assert client.post(f"/api/repositories/{repository_id}/inspect", json={"path": str(repo)}, headers=AUTH).status_code == 422
+
+
+def test_configured_roots_are_individual_repositories(tmp_path, monkeypatch, repo, caplog):
+    monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
+    with TestClient(create_app(state_dir=tmp_path / "state", runtime_port=0, repository_roots=[repo])) as client:
+        entries = client.get("/api/repositories", headers=AUTH).json()["repositories"]
+        assert len(entries) == 1 and entries[0]["source"] == "configured"
+    with TestClient(create_app(state_dir=tmp_path / "state2", runtime_port=0, repository_roots=[repo.parent])) as client:
+        assert client.get("/api/repositories", headers=AUTH).json()["repositories"] == []
+    assert "unsafe_path" in caplog.text
+
+
+def test_stale_configured_root_does_not_break_engine(tmp_path, monkeypatch, repo, caplog):
+    monkeypatch.setenv("PARADOX_TOKEN", "test-bearer")
+    missing = tmp_path / "moved-private-repository"
+    monkeypatch.setenv("PARADOX_REPOSITORY_ROOTS", os.pathsep.join((str(missing), str(repo))))
+    with TestClient(create_app(state_dir=tmp_path / "state", runtime_port=0)) as client:
+        entries = client.get("/api/repositories", headers=AUTH).json()["repositories"]
+        assert len(entries) == 1 and entries[0]["root"] == str(repo)
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/timelines").status_code == 200
+    assert "invalid_path" in caplog.text
+    assert str(missing) not in caplog.text
+
+
+def test_failed_persistence_does_not_change_memory_or_disk(repo, tmp_path, monkeypatch):
+    registry = Registry([], tmp_path / "registry-state")
+    registry.start()
+    entry = registry.register(str(repo))
+    before = registry.store.path.read_bytes()
+    def deny_write(*arguments):
+        raise OSError("disposable write failure")
+    monkeypatch.setattr("engine.repositories.persistence.os.replace", deny_write)
+    with pytest.raises(RepositoryError) as error:
+        registry.forget(entry["id"])
+    assert error.value.status == 503
+    assert registry.listing() == [entry]
+    assert registry.store.path.read_bytes() == before
+    assert not list(registry.store.path.parent.glob(".repositories-*"))
+
+
+def test_forget_is_durable_and_registry_is_private(repo, tmp_path):
+    state = tmp_path / "registry-state"
+    registry = Registry([], state)
+    registry.start()
+    entry = registry.register(str(repo))
+    assert registry.store.path.stat().st_mode & 0o777 == 0o600
+    registry.forget(entry["id"])
+    restarted = Registry([], state)
+    restarted.start()
+    assert restarted.listing() == []
+
+
+@pytest.mark.parametrize("change", ["permissions", "symlink", "sandbox"])
+def test_restart_revalidates_unavailable_roots_without_forgetting(repo, tmp_path, monkeypatch, change):
+    state = tmp_path / "registry-state"
+    registry = Registry([], state)
+    registry.start()
+    entry = registry.register(str(repo))
+    original_mode = repo.stat().st_mode
+    moved = repo.with_name("moved")
+    if change == "permissions":
+        repo.chmod(0)
+    elif change == "symlink":
+        repo.rename(moved)
+        repo.symlink_to(moved, target_is_directory=True)
+    else:
+        monkeypatch.setattr(droid_sandbox, "availability_reason", lambda: "unavailable")
+    try:
+        restarted = Registry([], state)
+        restarted.start()
+        assert restarted.listing() == [entry]
+        with pytest.raises(RepositoryError):
+            inspect_repository(restarted, entry["id"])
+    finally:
+        if change == "permissions":
+            repo.chmod(original_mode)
+        elif change == "symlink":
+            repo.unlink()
+            moved.rename(repo)
+
+
+def test_symlink_registry_is_not_followed_or_overwritten(repo, tmp_path):
+    state = tmp_path / "registry-state"
+    state.mkdir()
+    outside = tmp_path / "private.json"
+    outside.write_text("private untouched content")
+    (state / "repositories.json").symlink_to(outside)
+    registry = Registry([], state)
+    registry.start()
+    assert registry.listing() == []
+    with pytest.raises(RepositoryError) as error:
+        registry.register(str(repo))
+    assert error.value.status == 503
+    assert outside.read_text() == "private untouched content"
+    assert (state / "repositories.json").is_symlink()
+
+
+def test_repository_containing_engine_state_is_not_registered(repo):
+    before = tree(repo)
+    registry = Registry([], repo / "engine-state")
+    registry.start()
+    with pytest.raises(RepositoryError) as error:
+        registry.register(str(repo))
+    assert error.value.code == "unsafe_path"
+    assert tree(repo) == before
+
+
+def test_unsupported_inferred_configuration_does_not_break_restart(repo, tmp_path, monkeypatch):
+    def unicode_target(root, files):
+        result = supported(root, files)
+        result["candidates"]["app"][0]["target"] = "pkg.δ:app"
+        return result
+    monkeypatch.setattr("engine.repositories.inspection.inspect_project", unicode_target)
+    state = tmp_path / "registry-state"
+    registry = Registry([], state)
+    registry.start()
+    entry = registry.register(str(repo))
+    restarted = Registry([], state)
+    restarted.start()
+    from engine.repositories.inspection import validate
+    result = validate(restarted, entry["id"], None)
+    assert not result["valid"]
+    assert "configuration_unsupported" in {item["code"] for item in result["diagnostics"]}

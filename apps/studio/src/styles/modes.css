@@ -131,13 +131,17 @@ button.chip-select { padding-right: 10px; }
 .composer-options input { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 6px 8px; }
 .composer-dock .composer-status { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .composer-status p { margin: 0; }
-.submission { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(8, 10, 16, 0.6); }
+.submission, .submission-unconfirmed { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(8, 10, 16, 0.6); }
 .submission.phase-active { border-color: rgba(226, 177, 90, 0.4); }
 .submission.phase-failed { border-color: rgba(239, 125, 125, 0.4); }
 .submission.phase-succeeded { border-color: rgba(125, 206, 160, 0.35); }
 .submission-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .submission-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; }
 .submission-head .text-btn:first-of-type { margin-left: auto; }
+.submission-unconfirmed { border-color: rgba(226, 177, 90, 0.4); }
+.submission-candidates { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.submission-candidates li { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.submission-candidates li .fine { margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- Stepper ---------- */
 .stepper { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; flex-wrap: wrap; }
@@ -485,7 +489,7 @@ button.chip-select { padding-right: 10px; }
 }
 
 /* A running generation's strip never pushes the composer over the canvas. */
-.composer-dock .submission { max-height: 168px; overflow: auto; }
+.composer-dock .submission, .composer-dock .submission-unconfirmed { max-height: 168px; overflow: auto; }
 
 /* Tablets and phones: floating panels can't share the canvas without
    covering each other, so Explore becomes one scrolling column. */
@@ -506,7 +510,7 @@ button.chip-select { padding-right: 10px; }
   .mode-explore .inspector-float,
   .mode-explore.inspector-on .inspector-float { order: 3; height: auto; max-height: min(78vh, 680px); min-height: 320px; }
   .mode-explore .portal-float, .mode-explore .portal-float.is-expanded { order: 4; height: min(70vh, 520px); }
-  .composer-dock .submission { max-height: none; }
+  .composer-dock .submission, .composer-dock .submission-unconfirmed { max-height: none; }
   .mode-explore .canvas-dock { left: 12px; bottom: 12px; }
   .mode-explore > * { min-width: 0; max-width: 100%; }
   .mode-explore .composer-bar { flex-wrap: wrap; }

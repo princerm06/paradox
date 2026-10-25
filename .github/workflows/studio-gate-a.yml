@@ -1,0 +1,62 @@
+name: Studio Gate A
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-gate-a-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  studio-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/studio
+    env:
+      FACTORY_API_KEY: ""
+      PYTHONDONTWRITEBYTECODE: "1"
+      PARADOX_E2E_ENGINE: http://127.0.0.1:8010
+      PARADOX_E2E_URL: http://localhost:5174
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 20.20.2
+          cache: npm
+          cache-dependency-path: apps/studio/package-lock.json
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - name: Install isolated engine dependencies
+        working-directory: .
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -e '.[test]'
+      - name: Install Studio dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install browser
+        run: npx playwright install --with-deps chrome
+      - name: TypeScript
+        run: npx tsc -b
+      - name: Unit and integration tests
+        run: npx vitest run
+      - name: Production build
+        run: npm run build
+      - name: Lint
+        run: npx oxlint
+      - name: Isolated scripted E2E
+        run: npm run e2e

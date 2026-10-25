@@ -4,7 +4,7 @@ Two tracks. **Track S (scripted)** always works offline and is the default. **Tr
 
 ## T-24h
 
-- [ ] `main` has the approved merges (`verification-plan.md` §1), including the studio (PR #16, merge `bc9d3db`). Note the SHA: `________`
+- [ ] `main` has the approved merges (`verification-plan.md` §1), including the studio (PR #16, merge `bc9d3db`) and the Origin guard (PR #18, merge `10d5689`). Note the SHA: `________`
 - [ ] A clean checkout on the demo laptop: `.venv` installed, `npm --prefix engine/droid_adapter ci --ignore-scripts && npm --prefix engine/droid_adapter run build`
 - [ ] Full offline suites are green on that SHA
 - [ ] Studio installed from `main`: `npm --prefix apps/studio ci`. Studio checks green: `npm --prefix apps/studio run typecheck && npm --prefix apps/studio test && npm --prefix apps/studio run build`
@@ -16,8 +16,8 @@ Two tracks. **Track S (scripted)** always works offline and is the default. **Tr
 ## T-1h: rehearsal (Track S)
 
 - [ ] `python scripts/demo_rehearsal.py` → **PASS** (exercises create, switch, isolation, diff, confirm, decline, a failing recipe and cancel)
-- [ ] `python scripts/demo_rehearsal.py --keep-running`. Note the printed state dir and app URL, then open the studio against it.
-- [ ] The engine is started with `PARADOX_AGENT=scripted` (even when the key exists), so no stray request can spend credits
+- [ ] **Don't use `scripts/demo_rehearsal.py --keep-running` for the human demo.** The script builds its engine environment from `PATH` and `HOME` only, so that engine runs **without `PARADOX_TOKEN`**. Use the script only as the automated pre-flight check above. Start the presenter engine with the token block in *T-1h: studio setup* below.
+- [ ] **Credit safety comes from the missing key, not from `PARADOX_AGENT`.** `PARADOX_AGENT=scripted` only sets the *default* provider. If `FACTORY_API_KEY` is present, an explicit `provider: "droid"` request still runs. For Track S, the engine terminal must not have the key (`env -u FACTORY_API_KEY`), and `/api/agents` must show droid `available: false`.
 - [ ] The browser is zoomed for the projector, with notifications off
 
 ## T-1h: studio setup (Track S, scripted only)
@@ -28,16 +28,30 @@ The studio picks its starting agent like this:
 
 A paid-confirmation dialog still guards every non-scripted generation, but don't rely on it on stage. Use all three safeguards below.
 
-- [ ] Engine on the default port, scripted by default:
-  `PARADOX_AGENT=scripted .venv/bin/python -m engine` (no `FACTORY_API_KEY` in this terminal for Track S)
+- [ ] **Engine: scripted, keyless, token required.** `PARADOX_TOKEN` is **mandatory** for every demo engine: without it, any web page open in the browser can trigger state changes. Since PR #18, the engine also returns 403 for `/api` changes from origins not on the allowed list. That's defense-in-depth, not a replacement for the token. In one terminal, and keep the terminal open so restarts reuse the same token and state:
+  ```bash
+  cd ~/paradox
+  export PARADOX_TOKEN="$(openssl rand -hex 24)"; printf %s "$PARADOX_TOKEN" | pbcopy   # token is now on the clipboard
+  export PARADOX_STATE_DIR="$(mktemp -d /tmp/fork-demo.XXXXXX)/state"                   # fresh demo state
+  env -u FACTORY_API_KEY PARADOX_AGENT=scripted .venv/bin/python -m engine
+  ```
+  Don't paste the token into chat, slides or screenshots. A new terminal means a new token, which has to be entered again in the studio.
 - [ ] `curl -sS localhost:8000/api/agents` → `"default":"scripted"`. For Track S, droid should be `available: false`.
+- [ ] **Unauthorized POSTs are refused** (from a second terminal):
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/api/timelines/x/activate                                  # → 401 (no token)
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Origin: https://evil.example' localhost:8000/api/timelines/x/activate  # → 403 (foreign origin)
+  ```
+  A **404** or **200** on the first line means the engine started without `PARADOX_TOKEN`. Stop it and restart with the block above.
 - [ ] Studio with the scripted default forced:
   `VITE_PARADOX_API_BASE=http://127.0.0.1:8000 VITE_PARADOX_SAFE_PROVIDER=1 npm --prefix apps/studio run dev` → http://localhost:5173
 - [ ] If you use a production build instead, build it with the same flag:
   `VITE_PARADOX_API_BASE=http://127.0.0.1:8000 VITE_PARADOX_SAFE_PROVIDER=1 npm --prefix apps/studio run build`
 - [ ] **CORS for `vite preview`.** The engine allows only ports 3000 and 5173 by default, and `vite preview` serves on **4173**. Start the engine with the preview origins listed explicitly, keeping 5173 for the dev server:
-  `PARADOX_AGENT=scripted PARADOX_CORS_ORIGINS=http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://127.0.0.1:5173 .venv/bin/python -m engine`
+  `env -u FACTORY_API_KEY PARADOX_AGENT=scripted PARADOX_CORS_ORIGINS=http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://127.0.0.1:5173 .venv/bin/python -m engine` (in the same terminal, so `PARADOX_TOKEN` and `PARADOX_STATE_DIR` are still exported)
   then `npm --prefix apps/studio run preview`. Or run preview on 5173: `npm --prefix apps/studio run preview -- --port 5173 --strictPort`.
+- [ ] **Enter the token in the studio:** Settings → **Engine token** → paste (⌘V) → **Save**. The note should read "Stored in this browser for http://127.0.0.1:8000 only". Tokens are kept per engine URL, so the run-3 viewer on 8002 needs none.
+- [ ] Check the token works: generating or making a future live succeeds. If the studio shows **"Unauthorized: Missing or invalid token"**, the saved token is stale (for example, the engine was restarted from a new terminal). Paste the current one and Save again.
 - [ ] In the studio the composer chip reads **Agent: scripted**, the top bar shows **Live · Original**, and the engine dot is green.
 - [ ] Settings → Engine URL shows "Build default". A leftover override from testing would point the studio at another engine; press **Reset** if it shows one.
 
@@ -56,7 +70,9 @@ A paid-confirmation dialog still guards every non-scripted generation, but don't
 ## Track L (live Droid; only with the user's OK on the day)
 
 - [ ] Start the engine **from the terminal that has Keychain access**:
+  `export PARADOX_TOKEN="$(openssl rand -hex 24)"; printf %s "$PARADOX_TOKEN" | pbcopy`
   `FACTORY_API_KEY="$(security find-generic-password -a "$USER" -s paradox-factory-api-key -w)" .venv/bin/python -m engine`
+  Then enter the new token in Settings → Engine token, and repeat the unauthorized-POST check above.
 - [ ] `curl -sS localhost:8000/api/agents` → droid `available: true`
 - [ ] Run **one** generation with `provider: "droid"` explicitly. Run 3 took about 27s of agent time plus about 1 minute of validation; allow up to 6 minutes. Fill the time with steps 3–5 on an existing scripted future.
 - [ ] If it fails or runs past about 6 min, cancel and switch to Track S. Show the recorded real sessions instead (`docs/m3/factory-sponsor.md` §3).
@@ -89,12 +105,14 @@ This procedure was verified on 2026-10-24 with a production build: zero mutating
 
 ## Reset between runs
 
-- Stop the engine (Ctrl-C). Rerun `scripts/demo_rehearsal.py --keep-running` for a fresh state dir. Never reuse a state dir after a failed live run.
+- Stop the engine (Ctrl-C). For a fresh state dir, rerun the engine block in *T-1h: studio setup*: new `PARADOX_TOKEN`, new `PARADOX_STATE_DIR`, `env -u FACTORY_API_KEY`. Then paste the new token into Settings → Engine token and repeat the unauthorized-POST check. Never reuse a state dir after a failed live run.
 
 ## If something breaks
 
 | Symptom | Action |
 |---|---|
+| A studio action fails with "Unauthorized: Missing or invalid token" | Settings → Engine token → paste the current `$PARADOX_TOKEN` (`printf %s "$PARADOX_TOKEN" \| pbcopy` in the engine terminal) → Save. |
+| An action fails with "Origin not allowed" (403) | The studio's origin isn't in `PARADOX_CORS_ORIGINS`. Serve the studio on 5173, or add its exact origin (see CORS for `vite preview`). |
 | The studio shows the engine offline but `curl` works | It's CORS: the studio's origin isn't allowed. Restart the engine with `PARADOX_CORS_ORIGINS` (see studio setup), or serve the studio on 5173. Also check Settings → Engine URL for a stale override. |
 | The studio shows the engine offline | `curl -sS localhost:8000/api/health`. If it's dead, restart the engine with the same state dir (timelines and data survive a restart). |
 | The app pane is blank | `GET /api/timelines`, then activate the active timeline again to restart the runtime |
