@@ -174,10 +174,31 @@ def test_cancelled_project_validation_does_not_start_a_job_process(workspace):
     assert not control.processes
 
 
-def test_project_boot_stays_refused_until_runtime_integration(workspace):
+def test_project_boot_and_smoke_use_sandboxed_runtime(workspace, monkeypatch):
     source, directory, base, code, profile = workspace
+    control, before, after, changed = apply_recipe(workspace, 'prioritize notes')
+    for name in CREDENTIALS:
+        monkeypatch.setenv(name, 'dummy-offline-runtime-sentinel-' + name)
+    application = code / 'notes_app/main.py'
+    application.write_text(application.read_text() + '\nassert not set(' + repr(CREDENTIALS) + ').intersection(os.environ)\n')
+    current = files(code)
+    base_before = fingerprint(base)
     recorded = []
-    with pytest.raises(RuntimeError, match='requires the reviewed execution sandbox'):
+    duration = validate_runtime(directory, code, base / 'state', control, directory / 'validation.log',
+                                lambda *check: recorded.append(check), profile)
+    assert duration >= 0
+    assert [check[0] for check in recorded] == ['boot', 'smoke']
+    assert 'GET /health 200' in (directory / 'validation.log').read_text()
+    assert files(code) == current
+    assert fingerprint(base) == base_before
+
+
+def test_project_boot_fails_closed_when_sandbox_is_unavailable(workspace, monkeypatch):
+    source, directory, base, code, profile = workspace
+    monkeypatch.setattr('engine.adapters.exec_sandbox.availability_reason', lambda: 'forced-offline-unavailable')
+    monkeypatch.setattr('engine.runtime.subprocess.Popen', lambda *args, **kwargs: pytest.fail('unavailable sandbox spawned a child'))
+    recorded = []
+    with pytest.raises(RuntimeError, match='execution_sandbox_unavailable.*forced-offline-unavailable'):
         validate_runtime(directory, code, base / 'state', JobControl(), directory / 'validation.log',
                          lambda *check: recorded.append(check), profile)
     assert recorded == []

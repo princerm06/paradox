@@ -1,5 +1,23 @@
 # M2-A step 3: sandboxed validation integration
 
+## Runtime integration follow-up
+
+The original validation slice below was accepted at `e4cf5bb`. A subsequent full
+offline run at that exact commit passed **430 tests, 1 skipped, 1 deselected** in
+430.00 seconds, with all four credential variables unset and
+`PARADOX_AGENT=scripted`.
+
+Codex 2 then committed sandboxed Runtime wiring at `3b482de`, directly on
+`e4cf5bb`. This branch consumes that commit by ancestry. The obsolete boot-refusal
+test is replaced with real sandboxed boot/smoke and a forced sandbox-unavailable
+case that verifies failure before Popen. The real runtime also verifies sentinel
+credential absence, unchanged generated source and unchanged baseline state.
+Profile plus sandbox validation tests now pass **39 tests in 15.66 seconds**.
+
+The full project HTTP API, trust/import lifecycle and mirrored routes remain a
+separate Codex 2 dependency. The original slice's NO-GO statement below is
+historical; runtime boot is now tested, but full HTTP E2E is not yet claimed.
+
 ## Scope and ancestry
 
 Branch: `feat/repository-generation-m2a`.
