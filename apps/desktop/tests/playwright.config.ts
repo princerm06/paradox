@@ -1,5 +1,5 @@
 import { defineConfig } from "@playwright/test";
-// Drives the studio exactly as the .app serves it (http://localhost:5190) against the
+// Drives the studio exactly as the .app serves it (http://localhost:5192) against the
 // engine the .app itself launched, in WebKit (the engine behind macOS WKWebView).
 export default defineConfig({
   testDir: ".",
@@ -9,5 +9,5 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: [["list"]],
-  use: { browserName: "webkit", baseURL: "http://localhost:5190", viewport: { width: 1440, height: 900 }, actionTimeout: 15_000 },
+  use: { browserName: "webkit", baseURL: "http://localhost:5192", viewport: { width: 1440, height: 900 }, actionTimeout: 15_000 },
 });

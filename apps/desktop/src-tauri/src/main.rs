@@ -1,10 +1,17 @@
-// Paradox desktop shell (proof of concept).
+// Paradox Droid demo shell: the bundled Feed demo with genuine Factory Droid.
 //
-// Starts a private, keyless, scripted Paradox engine as a child process, serves
+// Demo-only build (not a hardened release). Same shell as the portable recording
+// build, plus a bundled Node runtime and Droid CLI. The Factory key is never in the
+// app: it is read at launch from the user's own Keychain item (service
+// `paradox-demo-factory-key`) and handed to the engine. Without it, Droid reports
+// unavailable and the app stays scripted. Droid writes stay confined by the engine's
+// existing write sandbox.
+//
+// Starts a private Paradox engine as a child process, serves
 // the studio build from an http://localhost origin (so the engine's existing
 // CORS allowlist applies unchanged), injects a random per-launch token, and
 // stops the engine when the app exits. The browser demo (engine :8000, studio
-// :5173, its own state) is never touched: this shell uses :8100/:5190 and its
+// :5173, its own state) is never touched: this shell uses :8120/:5192 and its
 // own state directory, and refuses to start if either port is taken.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -20,8 +27,8 @@ use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
-const ENGINE_PORT: u16 = 8100;
-const UI_PORT: u16 = 5190;
+const ENGINE_PORT: u16 = 8120;
+const UI_PORT: u16 = 5192;
 /// The engine ships inside the app: Contents/Resources/engine/{python,paradox}.
 /// Nothing refers to the source checkout it was built from.
 const ENGINE_DIR: &str = "engine";
@@ -68,6 +75,21 @@ fn fail(message: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Keychain service for the demo key. Use a disposable, low-budget key and revoke it after
+/// the demo. PARADOX_DEMO_KEY_SERVICE overrides the service name (tests use a dummy item).
+fn demo_factory_key() -> Option<String> {
+    let service = std::env::var("PARADOX_DEMO_KEY_SERVICE").unwrap_or_else(|_| "paradox-demo-factory-key".into());
+    let account = std::env::var("USER").ok()?;
+    let output = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", &service, "-a", &account, "-w"])
+        .env_clear()
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let key = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (output.status.success() && !key.is_empty()).then_some(key)
+}
+
 fn start_engine(bundle: &Path, data: &Path, token: &str) -> std::io::Result<Child> {
     let python = bundle.join("python/bin/python3.9");
     let repo = bundle.join("paradox");
@@ -75,26 +97,34 @@ fn start_engine(bundle: &Path, data: &Path, token: &str) -> std::io::Result<Chil
     fs::create_dir_all(&state)?;
     let log = File::create(data.join("engine.log"))?;
     let origins = format!("http://localhost:{UI_PORT},http://127.0.0.1:{UI_PORT}");
-    Command::new(python)
+    // Bundled Node and Droid CLI first, so the engine's provider finds exactly these.
+    let path = format!("{}:{}:/usr/bin:/bin:/usr/sbin:/sbin", bundle.join("node/bin").display(), bundle.join("bin").display());
+    let key = demo_factory_key();
+    let mut command = Command::new(python);
+    command
         .args(["-I", "-c", LAUNCHER])
         .current_dir(&repo)
-        // A clean environment: no FACTORY_API_KEY or anything else inherited from the user's shell.
+        // A clean environment: nothing inherited from the user's shell. The demo key, if
+        // configured, comes only from the Keychain item above.
         .env_clear()
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("PATH", &path)
         .env("HOME", std::env::var_os("HOME").unwrap_or_default())
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PARADOX_DESKTOP_REPO", &repo)
         .env("PARADOX_DESKTOP_PORT", ENGINE_PORT.to_string())
         .env("PARADOX_STATE_DIR", &state)
-        .env("PARADOX_AGENT", "scripted")
+        .env("PARADOX_AGENT", if key.is_some() { "droid" } else { "scripted" })
         .env("PARADOX_SCRIPTED_RECIPES", repo.join("tests/fixtures/scripted_agent"))
         .env("PARADOX_TOKEN", token)
         .env("PARADOX_CORS_ORIGINS", origins)
         .stdin(Stdio::piped())
         .stdout(log.try_clone()?)
         .stderr(log)
-        .process_group(0)
-        .spawn()
+        .process_group(0);
+    if let Some(key) = &key {
+        command.env("FACTORY_API_KEY", key);
+    }
+    command.spawn()
 }
 
 /// SIGTERM lets uvicorn run the engine's lifespan shutdown (checkpoint, stop
@@ -160,7 +190,12 @@ fn main() {
                 .ok()
                 .map(|resources| resources.join(ENGINE_DIR))
                 .and_then(|dir| fs::canonicalize(dir).ok())
-                .filter(|dir| dir.join("python/bin/python3.9").is_file() && dir.join("paradox/engine/api.py").is_file())
+                .filter(|dir| {
+                    dir.join("python/bin/python3.9").is_file()
+                        && dir.join("paradox/engine/api.py").is_file()
+                        && dir.join("node/bin/node").is_file()
+                        && dir.join("bin/droid").is_file()
+                })
                 .unwrap_or_else(|| fail("the bundled engine is missing from the app; reinstall Paradox"));
             if !port_free(ENGINE_PORT) {
                 fail(&format!("port {ENGINE_PORT} is already in use; another Paradox desktop engine may still be running"));
@@ -189,7 +224,7 @@ fn main() {
             );
             let url = format!("http://localhost:{UI_PORT}").parse().expect("static url");
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .title("Paradox (scripted)")
+                .title("Paradox · Factory Droid demo")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1024.0, 700.0)
                 .initialization_script(&init);

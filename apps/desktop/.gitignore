@@ -5,3 +5,5 @@ src-tauri/gen/
 test-results/
 engine-bundle/
 release/
+engine-bundle-droid-demo/
+release-droid-demo/

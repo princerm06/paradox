@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Paradox",
+  "productName": "Paradox Droid Demo",
   "version": "0.1.0",
-  "identifier": "dev.paradox.desktop",
+  "identifier": "dev.paradox.desktop.droid-demo",
   "build": {
     "frontendDist": "../dist"
   },

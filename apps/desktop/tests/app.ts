@@ -4,10 +4,10 @@ import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export const ENGINE = "http://127.0.0.1:8100";
-export const UI = "http://localhost:5190";
-export const APP = process.env.PARADOX_DESKTOP_APP ?? resolve(import.meta.dirname, "../src-tauri/target/release/bundle/macos/Paradox.app");
-export const APP_ID = process.env.PARADOX_DESKTOP_ID ?? "dev.paradox.desktop";
+export const ENGINE = "http://127.0.0.1:8120";
+export const UI = "http://localhost:5192";
+export const APP = process.env.PARADOX_DESKTOP_APP ?? resolve(import.meta.dirname, "../src-tauri/target/release/bundle/macos/Paradox Droid Demo.app");
+export const APP_ID = process.env.PARADOX_DESKTOP_ID ?? "dev.paradox.desktop.droid-demo";
 export const DATA = join(homedir(), "Library/Application Support", APP_ID);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,8 +19,8 @@ function listener(port: number): number | null {
     return null;
   }
 }
-export const enginePid = () => listener(8100);
-export const appPid = () => listener(5190);
+export const enginePid = () => listener(8120);
+export const appPid = () => listener(5192);
 export function alive(pid: number | null): boolean {
   if (!pid) return false;
   try {

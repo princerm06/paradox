@@ -7,7 +7,7 @@
   "scripts": {
     "dist:placeholder": "rm -rf dist && mkdir -p dist && cp placeholder/index.html dist/index.html",
     "tauri": "tauri",
-    "dist:studio": "cd ../studio && VITE_PARADOX_API_BASE=http://127.0.0.1:8100 VITE_PARADOX_SAFE_PROVIDER=1 npm run build -- --outDir ../desktop/dist --emptyOutDir",
+    "dist:studio": "cd ../studio && VITE_PARADOX_API_BASE=http://127.0.0.1:8120 npm run build -- --outDir ../desktop/dist --emptyOutDir",
     "test:desktop": "playwright test -c tests/playwright.config.ts"
   },
   "devDependencies": {
