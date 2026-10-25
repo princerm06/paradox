@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Generation } from "../api/types.ts";
 import { ChangeCount, ChecksView, DiffView, FileStatusMark, LoadingLine, LogLines, Notice, Provenance, TestCounts, checkCells, diffProvenance } from "../evidence/EvidenceViews.tsx";
 import { timelineById } from "../graph/tree.ts";
@@ -7,6 +7,7 @@ import { reportedFiles } from "../lib/diff.ts";
 import { formatRelative, formatStamp, generationStageLabel, modificationLabel, shortId, statusLabel } from "../lib/format.ts";
 import { generationPhase } from "../lib/generation.ts";
 import { lineageRelation, resolveSubject, sameSubject, subjectKey, subjectOptions, type Resolved } from "../lib/subject.ts";
+import { ModeIcon } from "../shell/icons.tsx";
 import { useNavigation, type Subject } from "../shell/navigation.tsx";
 import { useWorkspace } from "../state/workspace.tsx";
 import { compareSubjects, type Comparison } from "./compare.ts";
@@ -58,18 +59,35 @@ export function AnalyzeView({ onConsumed }: { onConsumed: () => void }) {
     <div className="mode-view analyze">
       <header className="mode-head glass-panel">
         <div className="mode-title">
-          <p className="brand-kicker">Analyze</p>
+          <p className="brand-kicker">Analyze / comparison</p>
           <h1>Compare futures</h1>
+          <p className="fine">Evidence-led comparison built only from engine records.</p>
         </div>
-        <div className="versus">
-          <SubjectSelect label="A" value={a} options={options} onChange={setA} />
-          <button type="button" className="icon-btn swap" aria-label="Swap A and B" onClick={() => { setA(b); setB(a); }}>
-            ⇄
-          </button>
-          <SubjectSelect label="B" value={b} options={options} onChange={setB} />
+        <div className="evidence-key" aria-label="Evidence key">
+          <span>
+            <i className="key-observed" aria-hidden="true" />
+            Observed
+          </span>
+          <span>
+            <i className="key-unavailable" aria-hidden="true" />
+            Unavailable
+          </span>
+          <span className="key-note">No estimates or simulated metrics</span>
         </div>
-        <p className="fine select-note">Choosing futures here never activates them.</p>
       </header>
+
+      <section className="compare-head" aria-label="Futures being compared">
+        <SubjectSlot side="A" role="Baseline" subject={left} generation={leftRecord.record}>
+          <SubjectSelect label="A" value={a} options={options} onChange={setA} />
+        </SubjectSlot>
+        <button type="button" className="icon-btn swap" aria-label="Swap A and B" onClick={() => { setA(b); setB(a); }}>
+          <ModeIcon mode="analyze" />
+        </button>
+        <SubjectSlot side="B" role="Comparison" subject={right} generation={rightRecord.record}>
+          <SubjectSelect label="B" value={b} options={options} onChange={setB} />
+        </SubjectSlot>
+        <p className="fine select-note">Choosing futures here never activates them.</p>
+      </section>
 
       {left && right ? (
         <p className="lineage-line">
@@ -81,6 +99,7 @@ export function AnalyzeView({ onConsumed }: { onConsumed: () => void }) {
         {TABS.map((name) => (
           <button key={name} type="button" role="tab" aria-selected={tab === name} className={tab === name ? "tab is-on" : "tab"} onClick={() => setTab(name)}>
             {name}
+            {name === "Files" && comparison.rows.length ? <b className="tab-count" aria-hidden="true">{comparison.rows.length}</b> : null}
           </button>
         ))}
       </div>
@@ -108,6 +127,25 @@ export function AnalyzeView({ onConsumed }: { onConsumed: () => void }) {
           </>
         )}
       </section>
+    </div>
+  );
+}
+
+function SubjectSlot({ side, role, subject, generation, children }: { side: "A" | "B"; role: string; subject: Resolved | null; generation: Generation | null; children: ReactNode }) {
+  const { activeTimelineId } = useWorkspace();
+  const timeline = subject?.timeline ?? null;
+  const facts: string[] = [];
+  if (timeline) facts.push(statusLabel(timeline));
+  else if (generation) facts.push(generationStageLabel(generation));
+  if (timeline && timeline.id === activeTimelineId) facts.push("Live");
+  if (generation) facts.push(`${reportedFiles(generation).length} files`);
+  return (
+    <div className={`compare-slot side-${side.toLowerCase()}`}>
+      <small>
+        {role} · {side}
+      </small>
+      {children}
+      <span className="slot-facts">{subject ? facts.join(" · ") || originLabel(subject, generation) : "Not chosen"}</span>
     </div>
   );
 }
@@ -166,31 +204,74 @@ function Summary({
   errors: Array<string | null>;
 }) {
   return (
-    <div className="summary">
-      <div className="pair">
-        <SubjectCard side="A" subject={left} generation={leftGen} error={errors[0]} />
-        <SubjectCard side="B" subject={right} generation={rightGen} error={errors[1]} />
-      </div>
-      <section className="findings glass-panel">
-        <h2>
-          Differences <Provenance kind="observed" source="engine records" />
-        </h2>
-        {comparison.findings.length === 0 ? <p className="fine">No recorded differences between these two futures.</p> : null}
-        <ul>
-          {comparison.findings.map((finding) => (
-            <li key={finding.text} className={`finding is-${finding.tone}`}>
-              <span className="finding-mark" aria-hidden="true" />
-              {finding.text}
-            </li>
+    <div className="summary analysis-grid">
+      <div className="summary-main">
+        <div className="pair">
+          <SubjectCard side="A" subject={left} generation={leftGen} error={errors[0]} />
+          <SubjectCard side="B" subject={right} generation={rightGen} error={errors[1]} />
+        </div>
+        <section className="findings glass-panel">
+          <h2>
+            Differences <Provenance kind="observed" source="engine records" />
+          </h2>
+          {comparison.findings.length === 0 ? <p className="fine">No recorded differences between these two futures.</p> : null}
+          <ul>
+            {comparison.findings.map((finding) => (
+              <li key={finding.text} className={`finding is-${finding.tone}`}>
+                <span className="finding-mark" aria-hidden="true" />
+                {finding.text}
+              </li>
+            ))}
+          </ul>
+          {comparison.caveats.map((caveat) => (
+            <p key={caveat} className="fine">
+              {caveat}
+            </p>
           ))}
-        </ul>
-        {comparison.caveats.map((caveat) => (
-          <p key={caveat} className="fine">
-            {caveat}
-          </p>
-        ))}
-      </section>
+        </section>
+      </div>
+      <Coverage left={left} right={right} leftGen={leftGen} rightGen={rightGen} />
     </div>
+  );
+}
+
+/** What the engine actually measured for each side, and what nobody measured. */
+function Coverage({ left, right, leftGen, rightGen }: { left: Resolved; right: Resolved; leftGen: Generation | null; rightGen: Generation | null }) {
+  const sides = [
+    { side: "A", subject: left, generation: leftGen },
+    { side: "B", subject: right, generation: rightGen },
+  ] as const;
+  return (
+    <aside className="coverage glass-panel" aria-label="Evidence coverage">
+      <h2>Evidence coverage</h2>
+      <h4>Validation</h4>
+      {sides.map(({ side, subject, generation }) => {
+        const passed = generation?.evaluation?.passed;
+        return (
+          <div key={side} className={`result ${passed === true ? "is-ok" : passed === false ? "is-bad" : "is-none"}`}>
+            <span className={side === "B" ? "side-tag b" : "side-tag"}>{side}</span>
+            <div>
+              <strong>{!generation ? "No validation record" : passed === true ? "Checks passed" : passed === false ? "Checks failed" : "Checks not complete"}</strong>
+              <span>{generation ? <TestCounts generation={generation} /> : subject.origin === "root" ? "Root codebase" : "No generation"}</span>
+            </div>
+          </div>
+        );
+      })}
+      <h4>Not measured</h4>
+      {[
+        ["Runtime performance", "Check durations are recorded; the running app's latency and load are not."],
+        ["Vulnerability scan", "The guard check enforces protected paths only; no security scan is run."],
+        ["Direct A↔B patch", "Each diff is against its own base; there is no cross-future diff endpoint."],
+      ].map(([title, detail]) => (
+        <div key={title} className="result is-none">
+          <Provenance kind="unavailable" />
+          <div>
+            <strong>{title}</strong>
+            <span>{detail}</span>
+          </div>
+        </div>
+      ))}
+    </aside>
   );
 }
 
