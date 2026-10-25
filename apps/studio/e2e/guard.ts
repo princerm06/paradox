@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
+import type { APIRequestContext, BrowserContext, Page, Route } from "@playwright/test";
 import { E2E_ENGINE, isolatedOrigin, leasePath } from "./target.mjs";
 
 const READ_ONLY = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -63,22 +63,75 @@ export async function installFirewall(context: BrowserContext, allowed: string[]
       firewall.violations.push(`${method} ${url.href}: not the isolated engine ${E2E_ENGINE}`);
       return route.abort("blockedbyclient");
     }
-    if (url.origin === E2E_ENGINE && url.pathname === "/api/generations") {
-      let body: Record<string, unknown> = {};
-      try {
-        body = JSON.parse(request.postData() ?? "{}") as Record<string, unknown>;
-      } catch {
-        /* Unparseable bodies fail the provider check below. */
-      }
-      if (body.provider !== "scripted") {
-        firewall.violations.push(`${method} ${url.href}: provider ${JSON.stringify(body.provider)} is not "scripted"`);
-        return route.abort("blockedbyclient");
-      }
-      firewall.generations.push(body);
-    }
+    if (url.origin === E2E_ENGINE && url.pathname === "/api/generations" && !admitGeneration(firewall, method, url, request.postData())) return route.abort("blockedbyclient");
     return route.continue();
   });
   return firewall;
+}
+
+function admitGeneration(firewall: Firewall, method: string, url: URL, data: string | null): boolean {
+  let body: Record<string, unknown> = {};
+  try {
+    body = JSON.parse(data ?? "{}") as Record<string, unknown>;
+  } catch {
+    /* Unparseable bodies fail the provider check below. */
+  }
+  if (body.provider !== "scripted") {
+    firewall.violations.push(`${method} ${url.href}: provider ${JSON.stringify(body.provider)} is not "scripted"`);
+    return false;
+  }
+  firewall.generations.push(body);
+  return true;
+}
+
+export type HeldGeneration = {
+  /** Resolves with the engine's real response once the engine has accepted the request. */
+  accepted: Promise<{ status: number; body: Record<string, unknown> }>;
+  /** Delivers the held response to the page, if it is still waiting. */
+  release: () => Promise<void>;
+};
+
+/**
+ * Lets the next browser generation POST reach the isolated engine, then holds
+ * the HTTP response back from the page. The same checks as the firewall apply
+ * first (isolated origin, scripted provider), so the hold never widens it.
+ */
+export async function holdNextGenerationResponse(page: Page, firewall: Firewall): Promise<HeldGeneration> {
+  const target = `${E2E_ENGINE}/api/generations`;
+  let accept!: (value: { status: number; body: Record<string, unknown> }) => void;
+  let fail!: (reason: unknown) => void;
+  const accepted = new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+    accept = resolve;
+    fail = reject;
+  });
+  let deliver: (() => Promise<void>) | null = null;
+  let used = false;
+  const handler = async (route: Route) => {
+    const request = route.request();
+    if (request.method() !== "POST" || used) return route.fallback();
+    used = true;
+    const url = new URL(request.url());
+    if (url.origin !== E2E_ENGINE || !admitGeneration(firewall, request.method(), url, request.postData())) {
+      fail(new Error("E2E guard: held generation request was refused"));
+      return route.abort("blockedbyclient");
+    }
+    try {
+      const response = await route.fetch();
+      accept({ status: response.status(), body: (await response.json()) as Record<string, unknown> });
+      deliver = () => route.fulfill({ response });
+    } catch (error) {
+      fail(error);
+    }
+  };
+  await page.route(target, handler);
+  return {
+    accepted,
+    release: async () => {
+      const send = deliver;
+      deliver = null;
+      if (send) await send();
+    },
+  };
 }
 
 /**

@@ -1,17 +1,52 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { errorMessage } from "../api/client.ts";
+import { ApiError, errorMessage } from "../api/client.ts";
 import type { AgentList, Generation } from "../api/types.ts";
 import { timelineById } from "../graph/tree.ts";
 import { Stepper } from "../inspector/FutureInspector.tsx";
 import { generationStageLabel } from "../lib/format.ts";
 import { generationPhase, isActiveGeneration } from "../lib/generation.ts";
-import { initialProvider, isPaidProvider, prefersFreeProvider } from "../lib/providers.ts";
+import { initialProvider, isPaidProvider } from "../lib/providers.ts";
 import { ConfirmDialog } from "../shell/ConfirmDialog.tsx";
 import { useAskInspect } from "../shell/inspect.tsx";
-import { useApi, useSessionState } from "../state/engine.tsx";
+import { readSession } from "../lib/session.ts";
+import { useApi, useEngine, useSessionState } from "../state/engine.tsx";
 import { useWorkspace } from "../state/workspace.tsx";
 
 type Providers = { status: "loading" } | { status: "error"; error: string } | { status: "ready"; list: AgentList };
+
+// `token` is a local correlation value for this tab's request; it is never sent
+// to the engine. `failure` is set when the response was lost or unreadable.
+type PendingSubmit = { token: string; prompt: string; parentId: string; provider: string; name: string | null; activateOnSuccess: boolean; knownIds: string[]; failure: string | null };
+
+function readPending(raw: string | null): PendingSubmit | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as PendingSubmit;
+    return value && typeof value.token === "string" && typeof value.prompt === "string" && Array.isArray(value.knownIds) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function matchesPending(generation: Generation, pending: PendingSubmit): boolean {
+  return (
+    !pending.knownIds.includes(generation.id) &&
+    generation.parent_id === pending.parentId &&
+    generation.prompt === pending.prompt &&
+    generation.provider === pending.provider &&
+    generation.activate_on_success === pending.activateOnSuccess &&
+    (!pending.name || generation.name === pending.name)
+  );
+}
+
+/** Only a 4xx answer proves the engine refused the request; anything else may follow an accepted one. */
+function definitelyRejected(reason: unknown): boolean {
+  return reason instanceof ApiError && reason.status >= 400 && reason.status < 500 && reason.status !== 408;
+}
+
+function requestToken(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
 
 function useProviders(connected: boolean) {
   const api = useApi();
@@ -37,7 +72,8 @@ function useProviders(connected: boolean) {
 }
 
 export function PromptComposer() {
-  const { timelines, generations, selectedId, selectedGenerationId, selectTimeline, selectGeneration, startGeneration, cancelGeneration, connected, activeTimelineId } = useWorkspace();
+  const { timelines, generations, generationsLoaded, loaded, selectTimeline, selectGeneration, startGeneration, cancelGeneration, connected, activeTimelineId, reload } = useWorkspace();
+  const { base } = useEngine();
   const askInspect = useAskInspect();
   const ids = useId();
   const providers = useProviders(connected);
@@ -49,6 +85,13 @@ export function PromptComposer() {
   const [submitting, setSubmitting] = useState(false);
   // Synchronous guard: two clicks in one frame must never create two generations.
   const inFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [attempted, setAttempted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The submission strip is local UI state, restored per engine after a
@@ -56,48 +99,71 @@ export function PromptComposer() {
   const [submissionId, setSubmissionId] = useSessionState("submission");
   const [restoredId] = useState(() => submissionId);
   const [adopted, setAdopted] = useState<string | null>(null);
+  const [matchedId, setMatchedId] = useSessionState("submissionMatched");
+  const [pendingRaw, setPendingRaw] = useSessionState("pendingSubmit");
+  const pending = readPending(pendingRaw);
+  const [parentChoice, setParentChoice] = useSessionState("composerParent");
   const [paidConfirm, setPaidConfirm] = useState(false);
   const [cancelState, setCancelState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
 
   const list = providers.state.status === "ready" ? providers.state.list : null;
   const available = list?.providers.filter((item) => item.available) ?? [];
   // Keep the chosen provider only while it stays available; otherwise start on
-  // the safe initial choice (free scripted provider in development builds).
+  // the safe initial choice (the free scripted provider, or none).
   useEffect(() => {
     if (!list) return;
     setProvider((current) => {
       if (current && list.providers.some((item) => item.id === current && item.available)) return current;
-      return initialProvider(list, prefersFreeProvider());
+      return initialProvider(list);
     });
   }, [list]);
 
-  const ghost = generations.find((generation) => generation.id === selectedGenerationId) ?? null;
-  const parent = timelineById(timelines, ghost ? ghost.parent_id : selectedId);
-  const submission: Generation | null = generations.find((generation) => generation.id === submissionId) ?? null;
+  const liveParent = timelineById(timelines, activeTimelineId);
+  const chosenParent = parentChoice ? timelineById(timelines, parentChoice) : null;
+  const parentIssue =
+    parentChoice && loaded
+      ? !chosenParent
+        ? "The chosen parent future no longer exists on this engine. Choose a parent."
+        : chosenParent.status === "declined"
+          ? "The chosen parent future was declined. Choose another parent."
+          : null
+      : null;
+  const parent = parentChoice ? (chosenParent && chosenParent.status !== "declined" ? chosenParent : null) : liveParent && liveParent.status !== "declined" ? liveParent : null;
   const running = generations.filter((generation) => isActiveGeneration(generation.status));
+  // While a request is unresolved, a lone lookalike is shown as a guess but the
+  // request context is kept, so a later second lookalike turns it back into a list.
+  const candidates = pending && !submitting ? generations.filter((generation) => matchesPending(generation, pending)) : [];
+  const guessed = generationsLoaded && candidates.length === 1 ? candidates[0] : null;
+  const submission: Generation | null = pending ? guessed : (generations.find((generation) => generation.id === submissionId) ?? null);
+  const track = (id: string) => {
+    setMatchedId(id);
+    setSubmissionId(id);
+    setPendingRaw(null);
+  };
 
   // After a refresh (or when another tab started one), surface a generation
   // the engine reports as running so its progress and Cancel stay reachable.
   // This only reads engine state; nothing is ever resubmitted.
   const newestRunning = running[0]?.id ?? null;
   useEffect(() => {
-    if (submission || !newestRunning) return;
+    if (submission || !newestRunning || pending) return;
     // A restored id may simply not be loaded yet.
     if (submissionId && !generations.length) return;
     setAdopted(newestRunning);
     setSubmissionId(newestRunning);
-  }, [generations.length, newestRunning, setSubmissionId, submission, submissionId]);
-  const origin = !submission ? null : adopted === submission.id ? "running" : restoredId === submission.id ? "restored" : null;
+  }, [generations.length, newestRunning, pending, setSubmissionId, submission, submissionId]);
+  const origin = !submission ? null : guessed || matchedId === submission.id ? "matched" : adopted === submission.id ? "running" : restoredId === submission.id ? "restored" : null;
   const otherRunning = running.filter((generation) => generation.id !== submission?.id).length;
   const chosen = list?.providers.find((item) => item.id === provider) ?? null;
   const parentOptions = timelines.filter((timeline) => timeline.status !== "declined");
 
   const problems: string[] = [];
   if (!connected) problems.push("The engine is offline.");
-  if (!parent) problems.push("Choose a parent future to branch from.");
-  else if (parent.status === "declined") problems.push("Declined futures cannot be used as a parent.");
+  if (parentIssue) problems.push(parentIssue);
+  else if (!parent) problems.push("Choose a parent future to branch from.");
   if (providers.state.status === "error") problems.push(`Providers unavailable: ${providers.state.error}`);
   else if (list && available.length === 0) problems.push("No agent provider is available on this engine.");
+  else if (list && !provider) problems.push("The free scripted provider is not available on this engine. Choose an agent provider explicitly.");
   else if (list && !chosen?.available) problems.push("Choose an available provider.");
   if (!prompt.trim()) problems.push("Describe the change you want.");
   const ready = problems.length === 0 && !submitting && providers.state.status === "ready";
@@ -115,10 +181,21 @@ export function PromptComposer() {
     setSubmitting(true);
     setError(null);
     setCancelState({ busy: false, error: null });
-    void startGeneration({ parentId: parent.id, prompt: prompt.trim(), provider, name: name.trim() || undefined, activateOnSuccess })
+    const request: PendingSubmit = { token: requestToken(), prompt: prompt.trim(), parentId: parent.id, provider, name: name.trim() || null, activateOnSuccess, knownIds: generations.map((item) => item.id), failure: null };
+    setPendingRaw(JSON.stringify(request));
+    setMatchedId(null);
+    setSubmissionId(null);
+    // A response may land after a reload or engine switch, when this tab has
+    // since dismissed the request or sent a newer one; it only resolves the
+    // stored request it belongs to.
+    const owns = () => readPending(readSession(base, "pendingSubmit"))?.token === request.token;
+    void startGeneration({ parentId: request.parentId, prompt: request.prompt, provider, name: request.name ?? undefined, activateOnSuccess })
       .then((created) => {
+        if (owns()) {
+          setPendingRaw(null);
+          setSubmissionId(created.id);
+        }
         setAdopted(null);
-        setSubmissionId(created.id);
         setPrompt("");
         setName("");
         setAttempted(false);
@@ -126,7 +203,11 @@ export function PromptComposer() {
         setActivateOnSuccess(false);
       })
       .catch((reason: unknown) => {
-        setError(errorMessage(reason, "The generation could not be started."));
+        const rejected = definitelyRejected(reason);
+        const detail = errorMessage(reason, "The engine's response could not be read.");
+        if (owns()) setPendingRaw(rejected ? null : JSON.stringify({ ...request, failure: detail }));
+        setError(rejected ? detail : `${detail} The outcome is unknown: the engine may have started this generation. Nothing was resubmitted.`);
+        if (!rejected && mounted.current) reload();
         // The engine may have changed provider availability; recheck.
         providers.reload();
       })
@@ -183,11 +264,15 @@ export function PromptComposer() {
         <label className="chip-select">
           <span className="chip-label">From</span>
           <select
-            value={parent && parent.status !== "declined" ? parent.id : ""}
-            onChange={(event) => event.target.value && selectTimeline(event.target.value)}
+            value={parent ? parent.id : ""}
+            onChange={(event) => {
+              const id = event.target.value;
+              if (id) setParentChoice(id === activeTimelineId ? null : id);
+            }}
             aria-label="Parent future"
+            aria-describedby={`${ids}-parent-source`}
           >
-            {!parent || parent.status === "declined" ? <option value="">Choose a parent</option> : null}
+            {!parent ? <option value="">Choose a parent</option> : null}
             {parentOptions.map((timeline) => (
               <option key={timeline.id} value={timeline.id}>
                 {timeline.name}
@@ -195,7 +280,15 @@ export function PromptComposer() {
               </option>
             ))}
           </select>
+          <span id={`${ids}-parent-source`} className="chip-label">
+            {parentChoice ? "chosen" : "live"}
+          </span>
         </label>
+        {parentChoice ? (
+          <button type="button" className="text-btn" onClick={() => setParentChoice(null)}>
+            Use live
+          </button>
+        ) : null}
         <ProviderChip state={providers.state} provider={provider} onProvider={setProvider} onRecheck={providers.reload} />
         <fieldset className="activation" aria-describedby={`${ids}-activation`}>
           <legend className="sr-only">After validation passes</legend>
@@ -230,6 +323,66 @@ export function PromptComposer() {
         </p>
         {attempted && problems.length > 0 ? <p className="composer-error">{problems[0]}</p> : null}
         {error ? <p className="composer-error">{error}</p> : null}
+        {pending && !submitting && !guessed ? (
+          <div className="submission-unconfirmed" role="group" aria-label="Unconfirmed submission">
+            <div className="submission-head">
+              <strong title={pending.prompt}>{pending.name ?? pending.prompt.slice(0, 60)}</strong>
+              <span className="fine">{pending.failure ? "Outcome unknown" : "Response not received"}</span>
+              <button type="button" className="text-btn" onClick={reload}>
+                Check again
+              </button>
+              <button type="button" className="text-btn" onClick={() => setPendingRaw(null)}>
+                Dismiss
+              </button>
+            </div>
+            {!generationsLoaded ? (
+              <p className="fine">Checking the engine for the generation this tab submitted. Nothing was resubmitted.</p>
+            ) : candidates.length === 0 ? (
+              <p className="fine">
+                No matching generation was found on the engine. The request may not have reached it, or the list has not caught up yet. Nothing was resubmitted.
+              </p>
+            ) : (
+              <>
+                <p className="fine">
+                  The engine's answer to this request was not received. {candidates.length} engine records match this prompt, parent and provider; another client may have sent an identical request, so the studio cannot tell which one is yours. Nothing was resubmitted.
+                </p>
+                <ul className="submission-candidates">
+                  {candidates.map((candidate) => (
+                    <li key={candidate.id}>
+                      <span className="fine">
+                        {generationStageLabel(candidate)} · {candidate.created_at} · {candidate.id.slice(0, 8)}
+                      </span>
+                      <button
+                        type="button"
+                        className="text-btn"
+                        onClick={() => {
+                          selectGeneration(candidate.id);
+                          askInspect();
+                        }}
+                      >
+                        Inspect
+                      </button>
+                      {isActiveGeneration(candidate.status) ? (
+                        <button
+                          type="button"
+                          className="text-btn danger-text"
+                          onClick={() => {
+                            void cancelGeneration(candidate.id).catch((reason: unknown) => setError(errorMessage(reason, "The generation could not be cancelled.")));
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      ) : null}
+                      <button type="button" className="text-btn" onClick={() => track(candidate.id)}>
+                        Track this one
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        ) : null}
         {submission ? (
           <div className={`submission phase-${phase}`}>
             <div className="submission-head">
@@ -262,16 +415,31 @@ export function PromptComposer() {
                   {cancelState.busy ? "Cancelling…" : "Cancel"}
                 </button>
               ) : (
-                <button type="button" className="text-btn" onClick={() => setSubmissionId(null)} aria-label="Dismiss result">
+                <button
+                  type="button"
+                  className="text-btn"
+                  onClick={() => {
+                    setPendingRaw(null);
+                    setSubmissionId(null);
+                  }}
+                  aria-label="Dismiss result"
+                >
                   Dismiss
                 </button>
               )}
+              {guessed ? (
+                <button type="button" className="text-btn" onClick={() => track(guessed.id)}>
+                  Track this one
+                </button>
+              ) : null}
             </div>
             {origin ? (
               <p className="fine submission-origin">
-                {origin === "running"
-                  ? `Running on the engine${submission.provider ? ` · ${submission.provider}` : ""}. Reattached after reload; nothing was resubmitted.`
-                  : "Restored after reload from the engine's record."}
+                {origin === "matched"
+                  ? "Recovered without the engine's response, by matching prompt, parent and provider. The engine did not confirm this was the tab's own request; an identical request from another client would look the same. Nothing was resubmitted."
+                  : origin === "running"
+                    ? `Running on the engine${submission.provider ? ` · ${submission.provider}` : ""}. Reattached after reload; it may have been started by another tab or client. Nothing was resubmitted.`
+                    : "Restored after reload from the engine's record."}
               </p>
             ) : null}
             {phase === "active" || phase === "failed" || phase === "cancelled" ? <Stepper generation={submission} /> : null}
@@ -343,6 +511,7 @@ function ProviderChip({
       <span className="chip-label">Agent</span>
       <select value={provider} onChange={(event) => onProvider(event.target.value)} aria-label="Agent provider">
         {!any ? <option value="">None available</option> : null}
+        {any && !current ? <option value="">Choose an agent</option> : null}
         {state.list.providers.map((item) => (
           <option key={item.id} value={item.id} disabled={!item.available}>
             {item.id}

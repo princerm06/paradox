@@ -230,7 +230,7 @@ describe("refresh recovery", () => {
     a.generations.push(generation({ id: "ffffffff-0000-0000-0000-00000000000f", name: "Started elsewhere", status: "validating", timeline_id: null, finished_at: null }));
     render(<App />);
     await screen.findByText("Started elsewhere", { selector: ".submission-head strong" });
-    expect(screen.getByText(/Reattached after reload; nothing was resubmitted/)).toBeInTheDocument();
+    expect(screen.getByText(/Reattached after reload; it may have been started by another tab or client\. Nothing was resubmitted/)).toBeInTheDocument();
     expect(a.mutations()).toEqual([]);
   });
 

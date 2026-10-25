@@ -23,6 +23,8 @@ type WorkspaceValue = {
   timelines: Timeline[];
   generations: Generation[];
   generationsError: string | null;
+  /** True once at least one generation list has been received from the engine. */
+  generationsLoaded: boolean;
   activeTimelineId: string | null;
   appUrl: string;
   selectedId: string | null;
@@ -95,6 +97,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [timelines, setTimelines] = useState<Timeline[]>([]);
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [generationsError, setGenerationsError] = useState<string | null>(null);
+  const [generationsLoaded, setGenerationsLoaded] = useState(false);
   const [activeTimelineId, setActiveTimelineId] = useState<string | null>(null);
   const [appUrl, setAppUrl] = useState("");
   // Selection is local UI state; it is restored per engine after a refresh but
@@ -167,6 +170,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // engine no longer has.
       setSelectedGenerationId((current) => (current && !incoming.some((item) => item.id === current) && !generationsRef.current.some((item) => item.id === current) ? null : current));
       setGenerationsError(null);
+      setGenerationsLoaded(true);
     } catch (error) {
       if (token < generationsApplied.current) return;
       setGenerationsError(message(error, "Generation records could not be loaded."));
@@ -307,6 +311,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       name: input.name?.trim() || undefined,
       activateOnSuccess: input.activateOnSuccess,
     });
+    if (!created || typeof created.id !== "string") throw new Error("The engine's response did not include the generation record.");
     setGenerations((previous) => mergeGenerations(previous, [created], false));
     setSelectedGenerationId(created.id);
     return created;
@@ -376,6 +381,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       timelines,
       generations,
       generationsError,
+      generationsLoaded,
       activeTimelineId,
       appUrl,
       selectedId,
@@ -401,6 +407,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       timelines,
       generations,
       generationsError,
+      generationsLoaded,
       activeTimelineId,
       appUrl,
       selectedId,
