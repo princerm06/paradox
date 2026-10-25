@@ -232,12 +232,35 @@ adoption/state restoration. Together these two non-overlapping selections give
 Log: `.venv/m2a-final-generation-validation.log`. The latter invocation also
 explicitly unset `OPENAI_API_KEY` and the optional long-generation test flag.
 
-## Exact remaining dependency and verdict
+## Final combined gate and verdict
 
-**M2-A workflow and single-process supervision: focused GO at `3c3a783`.
-Both known lifecycle findings have committed corrections and independently
-passing focused regressions. Overall M2 completion awaits B's final combined
-full offline result at `3c3a783`. This is not merge or distribution approval.**
+**M2 backend: GO for the approved single-process FastAPI/SQLite,
+disposable-repository, scripted-only scope at `3c3a783`. Both known lifecycle
+findings have committed corrections and independently passing regressions.
+This is not merge or distribution approval.**
+
+B's completed full offline gate on exact source
+`3c3a78324cccaf6c948724424e499085e3020a20` is **485 passed, 4 skipped,
+1 deselected in 674.97 seconds**, zero failures/errors/expected failures.
+A inspected the completed log, trusted runner status JSON (returncode 0 and
+matching source SHA) and JUnit summary (489 cases, four skips, zero failures
+or errors). The 102 independent focused passes above are separate replays,
+not additional cases to add to the full-suite total.
+
+Artifacts: `/tmp/paradox-m2b-final-durable-full.log`,
+`/tmp/paradox-m2b-final-durable-status.json` and
+`/tmp/paradox-m2b-final-durable-junit.xml`. The four skips are the opt-in long
+rehearsal and three built Droid adapter/SDK prerequisite checks. The sole
+deselection is the live paid Droid generation test. None hide required imported
+scripted-generation or supervision coverage. See `docs/m2-projects-api.md`
+for the exact command, environment and skip locations. No second full run was
+duplicated by A.
+
+The subsequent `f2f9af6`, `e554e6e` and this report amendment are docs-only;
+the full result is attributed to `3c3a783`, not represented as a new source run.
+Source/runtime security fixes remain local commits until the user approves
+push/PR/merge. The existing desktop ZIP is unchanged, and imported-project UI
+integration is outside this backend verdict.
 
 Codex 2 reported a separate disposable adversarial reproduction on `8e66728`:
 an imported app launched the approved Python interpreter with
