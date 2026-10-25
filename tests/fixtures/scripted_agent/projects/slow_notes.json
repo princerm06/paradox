@@ -1,0 +1,11 @@
+{
+  "adapter": "fastapi-sqlite-v1",
+  "requires": ["notes_app/main.py", "notes_app/ranking.py", "tests/test_notes.py"],
+  "match": "slow notes",
+  "delay_s": 5,
+  "summary": "Cancellable priority-ranking change.",
+  "files": {
+    "notes_app/ranking.py": "ORDERING = \"priority\"\n\ndef rank(notes):\n    return sorted(notes, key=lambda note: (note[\"priority\"], note[\"id\"]), reverse=True)\n",
+    "tests/test_generated_priority.py": "def test_generated_priority_order(client):\n    result = client.get(\"/api/notes\").json()\n    assert result[\"ordering\"] == \"priority\"\n    assert [note[\"priority\"] for note in result[\"notes\"]] == [8, 1]\n"
+  }
+}

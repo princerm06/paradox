@@ -1,0 +1,7 @@
+{
+  "adapter": "fastapi-sqlite-v1",
+  "requires": ["requirements.txt"],
+  "match": "change notes dependency",
+  "summary": "Deliberate immutable dependency guard failure.",
+  "files": {"requirements.txt": "fastapi\nuvicorn\nhttpx\npytest\nnot-installed-package\n"}
+}
