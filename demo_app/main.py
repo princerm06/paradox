@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, constr
 
-from demo_app import ranking
+from demo_app import input_policy, model, ranking, wildfire
 
 
 class NewPost(BaseModel):
@@ -28,6 +28,10 @@ class Post(BaseModel):
 class Feed(BaseModel):
     posts: list[Post]
     ordering: str
+
+
+class WildfireInput(BaseModel):
+    brightness: float
 
 
 @contextmanager
@@ -74,6 +78,7 @@ def create_app(app_dir: Optional[Path] = None) -> FastAPI:
         if ranking.ORDERING not in {"chronological", "popular"}:
             raise ValueError("ranking.ORDERING must be chronological or popular")
         initialize_database(database_path)
+        application.state.wildfire_fit, application.state.wildfire_report = wildfire.build_report()
         yield
 
     application = FastAPI(title="Paradox Demo Feed", lifespan=lifespan)
@@ -88,6 +93,16 @@ def create_app(app_dir: Optional[Path] = None) -> FastAPI:
         with database(database_path) as connection:
             connection.execute("SELECT 1 FROM posts LIMIT 1").fetchone()
         return {"status": "ok", "ordering": ranking.ORDERING}
+
+    @application.get("/api/wildfire")
+    def wildfire_report():
+        return application.state.wildfire_report
+
+    @application.post("/api/wildfire/predict")
+    def wildfire_predict(request: WildfireInput):
+        brightness = input_policy.validate_brightness(request.brightness)
+        prediction = model.predict(application.state.wildfire_fit, brightness)
+        return {"prediction": prediction, "model": model.MODEL_LABEL}
 
     @application.get("/api/posts", response_model=Feed)
     def list_posts():

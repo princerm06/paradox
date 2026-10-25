@@ -1,0 +1,11 @@
+{
+  "match": "wildfire security check",
+  "delay_s": 2,
+  "summary": "Scripted: added a negative-brightness regression expecting HTTP 422; intentionally fails against the vulnerable parent so validation must reject adoption.",
+  "requires": [
+    "demo_app/wildfire.py"
+  ],
+  "files": {
+    "demo_app/tests/test_wildfire_security.py": "def test_wildfire_feature_general(client):\n    response = client.post(\"/api/wildfire/predict\", json={\"brightness\": 330})\n    assert response.status_code == 200\n\n\ndef test_wildfire_negative_brightness_rejected(client):\n    response = client.post(\"/api/wildfire/predict\", json={\"brightness\": -10})\n    assert response.status_code == 422\n"
+  }
+}

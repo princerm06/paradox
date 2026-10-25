@@ -3,75 +3,634 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Paradox Demo Feed</title>
+  <title>Wildfire Intelligence Lab</title>
   <style>
-    body { font: 16px system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #202432; background: #f7f8fc; }
-    h1 { margin-bottom: 8px; } #ordering { color: #626878; }
-    form, article { padding: 20px; background: white; border: 1px solid #dde1ec; border-radius: 12px; margin: 16px 0; }
-    label { display: block; margin: 12px 0; } input, textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px; font: inherit; }
-    button { cursor: pointer; padding: 8px 14px; border-radius: 6px; border: 1px solid #adb7d5; background: #eef1ff; color: #263b82; }
-    button:disabled { opacity: .6; cursor: wait; } article p { white-space: pre-wrap; overflow-wrap: anywhere; } small { color: #626878; } #error { color: #a32424; }
+    :root {
+      color-scheme: dark;
+      --bg: #0c1218;
+      --surface: #121a22;
+      --surface-raised: #18242e;
+      --border: #243542;
+      --text: #e4eef4;
+      --muted: #8aa4b4;
+      --mint: #5eead4;
+      --cyan: #22d3ee;
+      --violet: #a78bfa;
+      --train: #22d3ee;
+      --test: #a78bfa;
+      --error: #f87171;
+      --ok: #6ee7b7;
+      --radius: 10px;
+      --gap: 10px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .shell {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap);
+    }
+    header.lab-header {
+      padding: 10px 14px;
+      background: linear-gradient(135deg, #142028 0%, #1a2838 55%, #1e1a32 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    header.lab-header h1 {
+      margin: 0 0 4px;
+      font-size: 1.25rem;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+      background: linear-gradient(90deg, var(--mint), var(--cyan), var(--violet));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .subtitle { margin: 0; color: var(--muted); font-size: 0.82rem; }
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      align-items: center;
+      margin-top: 10px;
+      font-size: 0.82rem;
+    }
+    #model-name { color: var(--cyan); font-weight: 600; }
+    #wildfire-status { color: var(--muted); }
+    #security-mode {
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      color: var(--mint);
+      font-size: 0.75rem;
+    }
+    .grid-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: var(--gap);
+    }
+    @media (max-width: 720px) {
+      .grid-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 420px) {
+      .grid-metrics { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+    }
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .metric-value {
+      margin: 4px 0;
+      font-size: 1.35rem;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+      color: var(--mint);
+    }
+    .metric-unit { font-size: 0.75rem; color: var(--muted); margin-left: 4px; }
+    .dataset-lines { margin: 0; font-size: 0.82rem; color: var(--text); }
+    .dataset-lines dt {
+      display: inline;
+      color: var(--muted);
+    }
+    .dataset-lines dt::after { content: ": "; }
+    .dataset-lines dd {
+      display: inline;
+      margin: 0 12px 0 0;
+    }
+    .limitation {
+      margin: 10px 0 0;
+      padding: 8px 10px;
+      border-left: 3px solid var(--violet);
+      background: rgba(167, 139, 250, 0.08);
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .plots {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--gap);
+    }
+    @media (max-width: 640px) {
+      .plots { grid-template-columns: 1fr; }
+    }
+    .plot-wrap {
+      position: relative;
+      min-height: 0;
+    }
+    .plot-wrap svg {
+      width: 100%;
+      height: 180px;
+      display: block;
+      border-radius: 6px;
+      background: var(--surface-raised);
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin-top: 8px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 5px;
+      vertical-align: middle;
+    }
+    .legend-train::before { background: var(--train); }
+    .legend-test::before { background: var(--test); }
+    .legend-actual::before { background: var(--cyan); }
+    .legend-pred::before { background: var(--violet); opacity: 0.85; }
+    .predict-panel label {
+      display: block;
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .predict-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    input[type="number"] {
+      width: 120px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      color: var(--text);
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid #3d5a6a;
+      background: linear-gradient(180deg, #1e3a4a, #162830);
+      color: var(--cyan);
+      font: inherit;
+      font-weight: 600;
+    }
+    button:hover:not(:disabled) { border-color: var(--cyan); }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    #prediction-result {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      min-height: 1.4em;
+    }
+    #prediction-result.ok { color: var(--ok); }
+    #prediction-result.err { color: var(--error); }
+    #prediction-result.pending { color: var(--muted); }
+    .global-error {
+      color: var(--error);
+      font-size: 0.85rem;
+      margin: 0;
+    }
+    details.notebook {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 0 12px 12px;
+    }
+    details.notebook summary {
+      cursor: pointer;
+      padding: 12px 0;
+      font-weight: 600;
+      color: var(--muted);
+      list-style: none;
+    }
+    details.notebook summary::-webkit-details-marker { display: none; }
+    details.notebook[open] summary { color: var(--violet); }
+    .notebook-form label { display: block; margin: 8px 0; font-size: 0.82rem; color: var(--muted); }
+    .notebook-form input, .notebook-form textarea {
+      display: block;
+      width: 100%;
+      margin-top: 4px;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      color: var(--text);
+      font: inherit;
+    }
+    .notebook-posts { margin-top: 10px; font-size: 0.8rem; }
+    .notebook-posts article {
+      padding: 8px 0;
+      border-top: 1px solid var(--border);
+    }
+    .notebook-posts strong { color: var(--cyan); }
+    .notebook-posts small { color: var(--muted); display: block; margin-top: 2px; }
+    .axis-label { fill: var(--muted); font-size: 10px; }
+    .plot-empty { fill: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
-  <h1>The Feed</h1>
-  <p id="ordering">Loading timeline behavior…</p>
-  <form id="compose">
-    <label>Your name<input name="author" required maxlength="80" value="Explorer"></label>
-    <label>Post<textarea name="content" required maxlength="2000" rows="3"></textarea></label>
-    <button type="submit">Publish post</button>
-  </form>
-  <p id="error" role="alert"></p>
-  <main id="posts" aria-live="polite"></main>
+  <div class="shell">
+    <header class="lab-header">
+      <h1>Wildfire Intelligence Lab</h1>
+      <p class="subtitle">NASA FIRMS · software experiment</p>
+      <div class="status-row">
+        <span id="model-name" aria-live="polite">Model loading…</span>
+        <span id="wildfire-status">Fetching wildfire bundle…</span>
+        <span id="security-mode" title="">Security</span>
+      </div>
+    </header>
+
+    <p id="global-error" class="global-error" role="alert"></p>
+
+    <section class="card" aria-labelledby="dataset-heading">
+      <h2 id="dataset-heading">Dataset</h2>
+      <dl class="dataset-lines" id="dataset-summary">
+        <dt>Source</dt><dd id="dataset-source">—</dd>
+        <dt>Window</dt><dd id="dataset-window">—</dd>
+        <dt>Rows</dt><dd id="dataset-rows">—</dd>
+        <dt>Train / test</dt><dd id="dataset-split">—</dd>
+        <dt>SHA256</dt><dd id="dataset-hash">—</dd>
+      </dl>
+      <p class="limitation" id="dataset-limitation">Limitations appear when the API responds.</p>
+    </section>
+
+    <section id="metrics" class="grid-metrics" aria-label="Model metrics">
+      <div class="card"><h2>MAE</h2><p class="metric-value" id="metric-mae">—</p><span class="metric-unit" id="metric-mae-unit">MW</span></div>
+      <div class="card"><h2>RMSE</h2><p class="metric-value" id="metric-rmse">—</p><span class="metric-unit">MW</span></div>
+      <div class="card"><h2>R²</h2><p class="metric-value" id="metric-r2">—</p></div>
+      <div class="card"><h2>Train / infer</h2><p class="metric-value" id="metric-timing">—</p><span class="metric-unit">ms</span></div>
+    </section>
+
+    <div class="plots">
+      <section class="card plot-wrap" aria-labelledby="geo-heading">
+        <h2 id="geo-heading">Geographic scatter (lon / lat)</h2>
+        <div id="geo-plot" role="img" aria-label="Observation locations"></div>
+        <div class="legend">
+          <span class="legend-train">Train split</span>
+          <span class="legend-test">Test split</span>
+        </div>
+      </section>
+      <section class="card plot-wrap" aria-labelledby="scatter-heading">
+        <h2 id="scatter-heading">Actual vs predicted FRP</h2>
+        <div id="actual-predicted-plot" role="img" aria-label="Actual versus predicted fire radiative power"></div>
+        <div class="legend">
+          <span class="legend-actual">Actual</span>
+          <span class="legend-pred">Predicted</span>
+        </div>
+      </section>
+    </div>
+
+    <section class="card predict-panel" aria-labelledby="predict-heading">
+      <h2 id="predict-heading">Input integrity check</h2>
+      <label for="brightness">Brightness temperature (K)</label>
+      <div class="predict-row">
+        <input type="number" id="brightness" name="brightness" value="330" step="any" inputmode="decimal">
+        <button type="button" id="predict-button">Check input</button>
+      </div>
+      <p id="prediction-result" class="pending" aria-live="polite">Submit brightness to call the predict endpoint.</p>
+    </section>
+
+    <details class="notebook">
+      <summary>State notebook</summary>
+      <form id="notebook-compose" class="notebook-form">
+        <label>Author<input name="author" required maxlength="80" value="Analyst"></label>
+        <label>Note<textarea name="content" required maxlength="2000" rows="2" placeholder="Snapshot observation…"></textarea></label>
+        <button type="submit">Save note</button>
+      </form>
+      <p id="notebook-error" class="global-error" role="alert"></p>
+      <div id="notebook-posts" class="notebook-posts" aria-live="polite"></div>
+    </details>
+  </div>
+
   <script>
-    const errorElement = document.querySelector('#error');
-    async function request(path, options = {}) {
-      const response = await fetch(path, { cache: 'no-store', ...options });
-      if (!response.ok) throw new Error(`Request failed (${response.status})`);
+    const globalError = document.querySelector("#global-error");
+    const modelNameEl = document.querySelector("#model-name");
+    const wildfireStatusEl = document.querySelector("#wildfire-status");
+    const securityModeEl = document.querySelector("#security-mode");
+    const predictionResultEl = document.querySelector("#prediction-result");
+    const predictButton = document.querySelector("#predict-button");
+    const brightnessInput = document.querySelector("#brightness");
+
+    function shortHash(fullHash) {
+      if (!fullHash || typeof fullHash !== "string") return "—";
+      return fullHash.length > 12 ? fullHash.slice(0, 12) + "…" : fullHash;
+    }
+
+    function formatNumber(value, digits) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+      return Number(value).toFixed(digits);
+    }
+
+    function splitColor(splitName) {
+      return splitName === "test" ? "var(--test)" : "var(--train)";
+    }
+
+    function renderEmptyPlot(container, message) {
+      container.innerHTML =
+        '<svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg">' +
+        '<text class="plot-empty" x="160" y="100" text-anchor="middle">' + message + "</text></svg>";
+    }
+
+    function renderGeoPlot(container, observations) {
+      if (!observations || observations.length === 0) {
+        renderEmptyPlot(container, "No observations");
+        return;
+      }
+      const lons = observations.map(function (row) { return row.longitude; });
+      const lats = observations.map(function (row) { return row.latitude; });
+      let minLon = Math.min.apply(null, lons);
+      let maxLon = Math.max.apply(null, lons);
+      let minLat = Math.min.apply(null, lats);
+      let maxLat = Math.max.apply(null, lats);
+      const padLon = (maxLon - minLon) * 0.08 || 1;
+      const padLat = (maxLat - minLat) * 0.08 || 1;
+      minLon -= padLon;
+      maxLon += padLon;
+      minLat -= padLat;
+      maxLat += padLat;
+      const width = 320;
+      const height = 200;
+      const margin = { left: 36, right: 12, top: 12, bottom: 28 };
+      const innerWidth = width - margin.left - margin.right;
+      const innerHeight = height - margin.top - margin.bottom;
+      function scaleX(lon) {
+        return margin.left + ((lon - minLon) / (maxLon - minLon)) * innerWidth;
+      }
+      function scaleY(lat) {
+        return margin.top + innerHeight - ((lat - minLat) / (maxLat - minLat)) * innerHeight;
+      }
+      let dots = "";
+      observations.forEach(function (obs) {
+        const color = splitColor(obs.split);
+        dots +=
+          '<circle cx="' + scaleX(obs.longitude) + '" cy="' + scaleY(obs.latitude) +
+          '" r="3.5" fill="' + color + '" opacity="0.85"><title>' +
+          obs.latitude.toFixed(4) + ", " + obs.longitude.toFixed(4) + " MW " + obs.frp + "</title></circle>";
+      });
+      const axis =
+        '<line x1="' + margin.left + '" y1="' + (height - margin.bottom) + '" x2="' + (width - margin.right) +
+        '" y2="' + (height - margin.bottom) + '" stroke="#3d5a6a" stroke-width="1"/>' +
+        '<line x1="' + margin.left + '" y1="' + margin.top + '" x2="' + margin.left +
+        '" y2="' + (height - margin.bottom) + '" stroke="#3d5a6a" stroke-width="1"/>' +
+        '<text class="axis-label" x="' + margin.left + '" y="' + (height - 17) + '">' + minLon.toFixed(1) + '</text>' +
+        '<text class="axis-label" x="' + (width - margin.right) + '" y="' + (height - 17) + '" text-anchor="end">' + maxLon.toFixed(1) + '</text>' +
+        '<text class="axis-label" x="' + (width / 2) + '" y="' + (height - 6) + '" text-anchor="middle">Longitude (degrees)</text>' +
+        '<text class="axis-label" transform="rotate(-90)" x="' + (-height / 2) + '" y="12" text-anchor="middle">Latitude</text>';
+      container.innerHTML =
+        '<svg viewBox="0 0 ' + width + " " + height + '" xmlns="http://www.w3.org/2000/svg">' +
+        axis + dots + "</svg>";
+    }
+
+    function renderActualPredictedPlot(container, pairs) {
+      if (!pairs || pairs.length === 0) {
+        renderEmptyPlot(container, "No prediction pairs");
+        return;
+      }
+      const actuals = pairs.map(function (row) { return row.actual; });
+      const predicted = pairs.map(function (row) { return row.predicted; });
+      let minVal = Math.min(Math.min.apply(null, actuals), Math.min.apply(null, predicted));
+      let maxVal = Math.max(Math.max.apply(null, actuals), Math.max.apply(null, predicted));
+      const pad = (maxVal - minVal) * 0.1 || 1;
+      minVal -= pad;
+      maxVal += pad;
+      const width = 320;
+      const height = 200;
+      const margin = { left: 36, right: 12, top: 12, bottom: 28 };
+      const innerWidth = width - margin.left - margin.right;
+      const innerHeight = height - margin.top - margin.bottom;
+      function scale(value) {
+        return margin.left + ((value - minVal) / (maxVal - minVal)) * innerWidth;
+      }
+      function scaleY(value) {
+        return margin.top + innerHeight - ((value - minVal) / (maxVal - minVal)) * innerHeight;
+      }
+      let dots = "";
+      pairs.forEach(function (pair) {
+        dots +=
+          '<circle cx="' + scale(pair.actual) + '" cy="' + scaleY(pair.predicted) +
+          '" r="3.5" fill="var(--cyan)" opacity="0.75"><title>actual ' + pair.actual +
+          ", predicted " + pair.predicted + "</title></circle>";
+      });
+      const diag =
+        '<line x1="' + scale(minVal) + '" y1="' + scaleY(minVal) +
+        '" x2="' + scale(maxVal) + '" y2="' + scaleY(maxVal) +
+        '" stroke="#3d5a6a" stroke-dasharray="4 3" stroke-width="1"/>';
+      const axis =
+        '<line x1="' + margin.left + '" y1="' + (height - margin.bottom) + '" x2="' + (width - margin.right) +
+        '" y2="' + (height - margin.bottom) + '" stroke="#3d5a6a" stroke-width="1"/>' +
+        '<line x1="' + margin.left + '" y1="' + margin.top + '" x2="' + margin.left +
+        '" y2="' + (height - margin.bottom) + '" stroke="#3d5a6a" stroke-width="1"/>' +
+        '<text class="axis-label" x="' + margin.left + '" y="' + (height - 17) + '">' + minVal.toFixed(1) + '</text>' +
+        '<text class="axis-label" x="' + (width - margin.right) + '" y="' + (height - 17) + '" text-anchor="end">' + maxVal.toFixed(1) + '</text>' +
+        '<text class="axis-label" x="' + (width / 2) + '" y="' + (height - 6) + '" text-anchor="middle">Actual FRP (MW)</text>' +
+        '<text class="axis-label" transform="rotate(-90)" x="' + (-height / 2) + '" y="12" text-anchor="middle">Predicted FRP (MW)</text>';
+      container.innerHTML =
+        '<svg viewBox="0 0 ' + width + " " + height + '" xmlns="http://www.w3.org/2000/svg">' +
+        axis + diag + dots + "</svg>";
+    }
+
+    function applyWildfirePayload(payload) {
+      globalError.textContent = "";
+      const model = payload.model || {};
+      const dataset = payload.dataset || {};
+      const metrics = payload.metrics || {};
+      const security = payload.security || {};
+
+      modelNameEl.textContent = model.label || model.id || "Unlabeled model";
+      wildfireStatusEl.textContent = model.description || "No model description returned.";
+      securityModeEl.textContent = security.mode ? "Security: " + security.mode : "Security: unknown";
+      securityModeEl.title = security.description || "";
+
+      document.querySelector("#dataset-source").textContent = "NASA FIRMS · Suomi NPP VIIRS C2";
+      document.querySelector("#dataset-source").title = dataset.source || "";
+      const windowText =
+        (dataset.window_start || "?").replace("T", " ").slice(0, 16) + " → " + (dataset.window_end || "?").replace("T", " ").slice(0, 16) + " UTC";
+      document.querySelector("#dataset-window").textContent = windowText;
+      document.querySelector("#dataset-rows").textContent =
+        dataset.rows != null ? String(dataset.rows) : "—";
+      document.querySelector("#dataset-rows").title = JSON.stringify(dataset.units || {});
+      document.querySelector("#dataset-split").textContent =
+        (dataset.train_rows != null ? dataset.train_rows + " train" : "—") +
+        " / " +
+        (dataset.test_rows != null ? dataset.test_rows + " test" : "—") + " · grouped UTC holdout";
+      document.querySelector("#dataset-split").title = dataset.split || "";
+      document.querySelector("#dataset-hash").textContent = shortHash(dataset.sha256);
+      document.querySelector("#dataset-limitation").textContent =
+        dataset.limitation ||
+        "Observational FRP estimation from brightness temperature; not a spread or containment forecast.";
+
+      document.querySelector("#metric-mae").textContent = formatNumber(metrics.mae, 3);
+      document.querySelector("#metric-rmse").textContent = formatNumber(metrics.rmse, 3);
+      document.querySelector("#metric-r2").textContent = formatNumber(metrics.r2, 3);
+      const trainMs = metrics.train_ms != null ? formatNumber(metrics.train_ms, 1) : "—";
+      const inferMs = metrics.inference_ms != null ? formatNumber(metrics.inference_ms, 2) : "—";
+      document.querySelector("#metric-timing").textContent = trainMs + " / " + inferMs;
+
+      renderGeoPlot(document.querySelector("#geo-plot"), payload.observations);
+      renderActualPredictedPlot(document.querySelector("#actual-predicted-plot"), payload.predictions);
+    }
+
+    async function loadWildfireBundle() {
+      modelNameEl.textContent = "Model loading…";
+      wildfireStatusEl.textContent = "Fetching wildfire bundle…";
+      try {
+        const response = await fetch("api/wildfire", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("GET api/wildfire failed (" + response.status + ")");
+        }
+        const payload = await response.json();
+        applyWildfirePayload(payload);
+      } catch (loadError) {
+        globalError.textContent = loadError.message || String(loadError);
+        wildfireStatusEl.textContent = "Wildfire API unavailable — metrics and plots stay empty until backend is ready.";
+        renderEmptyPlot(document.querySelector("#geo-plot"), "API unavailable");
+        renderEmptyPlot(document.querySelector("#actual-predicted-plot"), "API unavailable");
+      }
+    }
+
+    async function runPredict() {
+      predictionResultEl.className = "pending";
+      predictionResultEl.textContent = "Calling POST api/wildfire/predict…";
+      predictButton.disabled = true;
+      const brightness = Number(brightnessInput.value);
+      try {
+        const response = await fetch("api/wildfire/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({ brightness: brightness }),
+        });
+        let body = null;
+        try {
+          body = await response.json();
+        } catch (parseError) {
+          body = null;
+        }
+        if (response.status === 200) {
+          predictionResultEl.className = "ok";
+          const label = body && body.model ? body.model : "model";
+          const value = body && body.prediction != null ? body.prediction : "—";
+          predictionResultEl.textContent =
+            "HTTP 200 — " + label + " predicted FRP " + value + " MW for brightness " + brightness + " K.";
+        } else if (response.status === 422) {
+          predictionResultEl.className = "err";
+          const detail =
+            body && body.detail
+              ? typeof body.detail === "string"
+                ? body.detail
+                : JSON.stringify(body.detail)
+              : "Validation rejected this input.";
+          predictionResultEl.textContent = "HTTP 422 — " + detail;
+        } else {
+          predictionResultEl.className = "err";
+          predictionResultEl.textContent =
+            "HTTP " + response.status + " — " + (body ? JSON.stringify(body) : "No response body");
+        }
+      } catch (predictError) {
+        predictionResultEl.className = "err";
+        predictionResultEl.textContent = predictError.message || String(predictError);
+      } finally {
+        predictButton.disabled = false;
+      }
+    }
+
+    const notebookError = document.querySelector("#notebook-error");
+    const notebookPosts = document.querySelector("#notebook-posts");
+
+    async function request(path, options) {
+      const response = await fetch(path, options);
+      if (!response.ok) throw new Error(path + " failed (" + response.status + ")");
       return response.json();
     }
-    async function refresh() {
-      const feed = await request('api/posts');
-      document.querySelector('#ordering').textContent = `Ordering: ${feed.ordering}`;
-      const articles = feed.posts.map(post => {
-        const article = document.createElement('article');
-        const author = document.createElement('strong');
-        author.textContent = post.author;
-        const content = document.createElement('p');
-        content.textContent = post.content;
-        const timestamp = document.createElement('small');
-        timestamp.textContent = new Date(post.created_at).toLocaleString();
-        const like = document.createElement('button');
-        like.textContent = `♥ ${post.likes}`;
-        like.style.marginLeft = '12px';
-        like.addEventListener('click', () => perform(like, async () => {
-          await request(`api/posts/${post.id}/like`, { method: 'POST' });
-          await refresh();
-        }));
-        article.append(author, content, timestamp, like);
-        return article;
-      });
-      document.querySelector('#posts').replaceChildren(...articles);
+
+    async function refreshNotebook() {
+      notebookError.textContent = "";
+      try {
+        const feed = await request('api/posts', { cache: "no-store" });
+        const posts = (feed.posts || []).slice(0, 6);
+        if (posts.length === 0) {
+          notebookPosts.textContent = "No notes yet.";
+          return;
+        }
+        notebookPosts.replaceChildren();
+        posts.forEach(function (post) {
+          const article = document.createElement("article");
+          const author = document.createElement("strong");
+          author.textContent = post.author;
+          const content = document.createElement("p");
+          content.textContent = post.content;
+          content.style.margin = "4px 0";
+          const time = document.createElement("small");
+          time.textContent = new Date(post.created_at).toLocaleString();
+          article.append(author, content, time);
+          notebookPosts.append(article);
+        });
+      } catch (notebookErr) {
+        notebookError.textContent = notebookErr.message || String(notebookErr);
+      }
     }
-    async function perform(button, action) {
-      errorElement.textContent = '';
-      button.disabled = true;
-      try { await action(); } catch (error) { errorElement.textContent = error.message; }
-      finally { button.disabled = false; }
-    }
-    document.querySelector('#compose').addEventListener('submit', event => {
+
+    document.querySelector("#notebook-compose").addEventListener("submit", function (event) {
       event.preventDefault();
       const form = event.currentTarget;
-      perform(form.querySelector('button'), async () => {
-        await request('api/posts', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ author: form.elements.author.value, content: form.elements.content.value })
+      const submitBtn = form.querySelector("button");
+      submitBtn.disabled = true;
+      notebookError.textContent = "";
+      fetch("api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: form.elements.author.value,
+          content: form.elements.content.value,
+        }),
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error("POST api/posts failed (" + response.status + ")");
+          form.elements.content.value = "";
+          return refreshNotebook();
+        })
+        .catch(function (err) {
+          notebookError.textContent = err.message || String(err);
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
         });
-        form.elements.content.value = '';
-        await refresh();
-      });
     });
-    refresh().catch(error => { errorElement.textContent = error.message; });
+
+    predictButton.addEventListener("click", runPredict);
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") {
+        loadWildfireBundle();
+      }
+    });
+    window.addEventListener("pageshow", function () {
+      loadWildfireBundle();
+    });
+
+    loadWildfireBundle();
+    refreshNotebook();
   </script>
 </body>
 </html>

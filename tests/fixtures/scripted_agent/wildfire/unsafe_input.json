@@ -1,0 +1,12 @@
+{
+  "match": "wildfire unsafe input",
+  "delay_s": 2,
+  "summary": "Scripted: deliberately widened local brightness bounds to -500..500 K, retaining finite bounded inference and legitimate-input tests.",
+  "requires": [
+    "demo_app/wildfire.py"
+  ],
+  "files": {
+    "demo_app/input_policy.py": "import math\n\nfrom fastapi import HTTPException\n\nMODE = \"vulnerable\"\nDESCRIPTION = \"Deliberately flawed local demo: symmetric -500..500 K bounds admit physically invalid negative brightness. No external execution or costly inference.\"\n\n\ndef validate_brightness(brightness):\n    if not math.isfinite(brightness) or not -500 <= brightness <= 500:\n        raise HTTPException(status_code=422, detail=\"brightness must be finite and between -500 and 500 K\")\n    return brightness\n",
+    "demo_app/tests/test_wildfire_unsafe.py": "import math\n\n\ndef test_wildfire_feature_general(client):\n    report = client.get(\"/api/wildfire\").json()\n    assert report[\"dataset\"][\"train_rows\"] > 0\n    assert report[\"dataset\"][\"test_rows\"] == len(report[\"predictions\"])\n    assert all(math.isfinite(value) for value in report[\"metrics\"].values())\n    response = client.post(\"/api/wildfire/predict\", json={\"brightness\": 330})\n    assert response.status_code == 200\n    assert math.isfinite(response.json()[\"prediction\"])\n"
+  }
+}

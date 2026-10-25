@@ -1,0 +1,12 @@
+{
+  "match": "wildfire model a",
+  "delay_s": 2,
+  "summary": "Scripted: replaced model.py with actual brightness OLS and added a descendant-compatible feature test.",
+  "requires": [
+    "demo_app/wildfire.py"
+  ],
+  "files": {
+    "demo_app/model.py": "from statistics import mean\n\nMODEL_ID = \"model_a\"\nMODEL_LABEL = \"Model A \u00b7 brightness OLS\"\nMODEL_DESCRIPTION = \"Ordinary least squares FRP from same-time VIIRS I4 brightness; not a forecast.\"\n\n\ndef fit(rows):\n    brightness_mean = mean(row[\"bright_ti4\"] for row in rows)\n    target_mean = mean(row[\"frp\"] for row in rows)\n    variance = sum((row[\"bright_ti4\"] - brightness_mean) ** 2 for row in rows)\n    covariance = sum((row[\"bright_ti4\"] - brightness_mean) * (row[\"frp\"] - target_mean) for row in rows)\n    slope = covariance / variance if variance else 0.0\n    return target_mean, brightness_mean, slope\n\n\ndef predict(fitted, brightness):\n    target_mean, brightness_mean, slope = fitted\n    return target_mean + slope * (brightness - brightness_mean)\n",
+    "demo_app/tests/test_wildfire_model_a.py": "import math\n\n\ndef test_wildfire_feature_general(client):\n    report = client.get(\"/api/wildfire\").json()\n    assert report[\"dataset\"][\"train_rows\"] > 0\n    assert report[\"dataset\"][\"test_rows\"] == len(report[\"predictions\"])\n    assert all(math.isfinite(value) for value in report[\"metrics\"].values())\n    response = client.post(\"/api/wildfire/predict\", json={\"brightness\": 330})\n    assert response.status_code == 200\n    assert math.isfinite(response.json()[\"prediction\"])\n"
+  }
+}

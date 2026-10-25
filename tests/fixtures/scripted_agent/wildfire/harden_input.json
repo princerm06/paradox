@@ -1,0 +1,12 @@
+{
+  "match": "wildfire harden input",
+  "delay_s": 2,
+  "summary": "Scripted: restored finite 200..500 K validation and added the same negative-brightness regression; retains the selected model unchanged.",
+  "requires": [
+    "demo_app/wildfire.py"
+  ],
+  "files": {
+    "demo_app/input_policy.py": "import math\n\nfrom fastapi import HTTPException\n\nMODE = \"hardened\"\nDESCRIPTION = \"Finite brightness temperatures from 200 to 500 K only; constant-size local inference.\"\n\n\ndef validate_brightness(brightness):\n    if not math.isfinite(brightness) or not 200 <= brightness <= 500:\n        raise HTTPException(status_code=422, detail=\"brightness must be finite and between 200 and 500 K\")\n    return brightness\n",
+    "demo_app/tests/test_wildfire_security.py": "def test_wildfire_feature_general(client):\n    response = client.post(\"/api/wildfire/predict\", json={\"brightness\": 330})\n    assert response.status_code == 200\n\n\ndef test_wildfire_negative_brightness_rejected(client):\n    response = client.post(\"/api/wildfire/predict\", json={\"brightness\": -10})\n    assert response.status_code == 422\n"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "source": "https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_USA_contiguous_and_Hawaii_24h.csv",
+  "acquisition_started_utc": "2026-10-25T07:18:21Z",
+  "acquisition_completed_utc": "2026-10-25T07:18:21Z",
+  "sha256": "66a3b9ea2f099b04d795292450a84710f57a17e0a23bfafc57b22e9ae82cd9c6",
+  "raw_rows": 1198,
+  "bytes": 98719,
+  "retrieval": "curl --fail --show-error --silent --proto '=https' --tlsv1.2 SOURCE -o demo_app/data/nasa_viirs.csv"
+}
