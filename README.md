@@ -1,8 +1,8 @@
-# Fork
+# Paradox
 
 An interactive software time machine. Explore, test, and navigate alternate futures of your applications.
 
-Fork runs your app, lets you **sprout** a child timeline from any point, change it, and switch between timelines.
+Paradox runs your app, lets you **sprout** a child timeline from any point, change it, and switch between timelines.
 Each timeline keeps its own code **and** database state. You can confirm or decline each future.
 Every future is a real, running version of the app, not a mockup.
 
@@ -24,7 +24,7 @@ POST /api/generations {parent_id, prompt}
 
 - **The SDK does the actual coding.** The Python engine starts the Node adapter and talks to it over a small JSON stdin / JSONL stdout
   interface (`docs/contracts/m2-generation.md` §4.1; adapter internals are in `engine/droid_adapter/README.md`). The adapter opens a Droid session in the future's workspace, streams it,
-  and returns the SDK's result to Fork.
+  and returns the SDK's result to Paradox.
 - **Every future records Droid's provenance.** That's the SDK `sessionId`, run duration, Droid's summary, token usage and
   Factory credits, the full event log, the code diff, and Fork's evaluation (`GET /api/generations/{id}`, `/logs`, `/diff`).
 - **Guardrails come from the SDK's own permission model.** Non-file tools are removed with `disabledToolIds`, and a
