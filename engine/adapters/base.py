@@ -34,7 +34,7 @@ class ProjectProfile:
     immutable_paths: Tuple[str, ...]
     # Files under this prefix that exist in the base are immutable (tests can be added, not edited).
     protected_tests_prefix: str
-    # Glob patterns, relative to the state directory, copied with the SQLite backup API.
+    # Recursive glob patterns relative to the state directory; matches are copied with the SQLite backup API.
     sqlite_state_globs: Tuple[str, ...]
     # "trusted_local" runs unsandboxed (bundled demo only). "sandboxed" requires the execution sandbox.
     execution: str
@@ -53,7 +53,7 @@ DEMO_PROFILE = ProjectProfile(
     editable_prefixes=("demo_app/",),
     immutable_paths=("demo_app/AGENTS.md",),
     protected_tests_prefix="demo_app/tests/",
-    sqlite_state_globs=("app.sqlite3",),
+    sqlite_state_globs=("app.sqlite3",),  # demo: exactly today's file
     execution="trusted_local",
     providers=("scripted", "droid"),
 )
