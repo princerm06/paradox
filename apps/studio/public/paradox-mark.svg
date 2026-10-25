@@ -1,0 +1,24 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="7" y1="8" x2="90" y2="88" gradientUnits="userSpaceOnUse"><stop stop-color="#17142B"/><stop offset="1" stop-color="#060A12"/></linearGradient>
+    <linearGradient id="edge" x1="10" y1="10" x2="86" y2="87" gradientUnits="userSpaceOnUse"><stop stop-color="#7346FF"/><stop offset=".52" stop-color="#299CF5"/><stop offset="1" stop-color="#39E7D1"/></linearGradient>
+    <linearGradient id="upper" x1="19" y1="49" x2="76" y2="23" gradientUnits="userSpaceOnUse"><stop stop-color="#A96FFF"/><stop offset=".48" stop-color="#58CFFF"/><stop offset="1" stop-color="#54F0C0"/></linearGradient>
+    <linearGradient id="lower" x1="36" y1="51" x2="72" y2="76" gradientUnits="userSpaceOnUse"><stop stop-color="#75B7FF"/><stop offset="1" stop-color="#9A5BFF"/></linearGradient>
+    <filter id="g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2" result="b"/><feComposite in="b" in2="SourceGraphic" operator="over"/></filter>
+  </defs>
+  <rect x="4" y="4" width="88" height="88" rx="25" fill="url(#bg)"/>
+  <rect x="4.8" y="4.8" width="86.4" height="86.4" rx="24.2" stroke="url(#edge)" stroke-opacity=".62" stroke-width="1.6"/>
+  <path d="M29 50H42C54 50 56 38 64 31L72 25" stroke="url(#upper)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" filter="url(#g)"/>
+  <path d="M42 50C54 50 59 45 69 48L76 51" stroke="#4C9EFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M42 50C54 50 55 62 63 69L69 75" stroke="url(#lower)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" filter="url(#g)"/>
+  <path d="M48 45C55 32 62 23 72 18" stroke="#32D8D2" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="1 6"/>
+  <path d="M51 59C60 66 67 72 77 76" stroke="#7047E8" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="1 6"/>
+  <path d="M28 50C35 27 56 18 77 23" stroke="#2874CC" stroke-opacity=".28" stroke-width="1.2"/>
+  <path d="M29 50C42 72 59 81 76 75" stroke="#7047E8" stroke-opacity=".27" stroke-width="1.2"/>
+  <circle cx="23" cy="50" r="7" fill="#7040D9" stroke="#F0E6FF" stroke-width="3" filter="url(#g)"/>
+  <circle cx="43" cy="50" r="4" fill="#BDEFFF" stroke="white" stroke-width="1.5"/>
+  <circle cx="59" cy="37" r="4" fill="#9EEFFF" stroke="white" stroke-width="1.5"/>
+  <circle cx="75" cy="22" r="8" fill="#55EABD" stroke="#ECFFF9" stroke-width="3" filter="url(#g)"/>
+  <circle cx="79" cy="52" r="6" fill="#4C94F2" stroke="#F0F7FF" stroke-width="2.5" filter="url(#g)"/>
+  <circle cx="71" cy="77" r="6" fill="#9B5DF7" stroke="#FAF2FF" stroke-width="2.5" filter="url(#g)"/>
+</svg>

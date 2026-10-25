@@ -228,6 +228,10 @@ export function PromptComposer() {
         submit();
       }}
     >
+      <div className="composer-caption">
+        <span className="brand-kicker">Create a future</span>
+        <span>Explore a change. Keep your live app safe.</span>
+      </div>
       <div className="composer-main">
         <span className="composer-glyph" aria-hidden="true">
           <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round">
