@@ -30,12 +30,19 @@ def inspect(registry, repository_id):
 
 def validate(registry, repository_id, supplied, persist=True):
     inspection = inspect(registry, repository_id)
-    analysis = inspection["analysis"]
-    candidates = analysis["candidates"]
-    diagnostics = list(analysis["diagnostics"])
     if supplied is None:
         stored = registry.configuration(repository_id)
         supplied = AdapterConfig.model_validate(stored) if stored else None
+    result = validate_inspection(inspection, supplied)
+    if result["valid"] and persist:
+        registry.save_configuration(repository_id, result["configuration"])
+    return result
+
+
+def validate_inspection(inspection, supplied):
+    analysis = inspection["analysis"]
+    candidates = analysis["candidates"]
+    diagnostics = list(analysis["diagnostics"])
     if supplied is None and len(candidates["app"]) == len(candidates["tests"]) == len(candidates["health"]) == 1:
         try:
             supplied = AdapterConfig(adapter="fastapi-sqlite-v1", app=candidates["app"][0]["target"],
@@ -73,8 +80,6 @@ def validate(registry, repository_id, supplied, persist=True):
         diagnostics.append(diagnostic("dirty_working_tree", "Inspection includes current tracked working files, not only HEAD", "warning"))
     diagnostics.append(diagnostic("static_validation_only", "No commands executed; runtime, dependency and isolation checks remain required before execution", "info"))
     valid = not any(item["severity"] == "error" for item in diagnostics)
-    if valid and persist:
-        registry.save_configuration(repository_id, supplied.model_dump())
     return {"repository": inspection["repository"], "valid": valid,
             "configuration": supplied.model_dump() if supplied else None, "diagnostics": diagnostics}
 

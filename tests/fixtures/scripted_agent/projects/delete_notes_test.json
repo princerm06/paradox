@@ -1,0 +1,7 @@
+{
+  "adapter": "fastapi-sqlite-v1",
+  "requires": ["tests/test_notes.py"],
+  "match": "delete notes test",
+  "summary": "Deliberate immutable test guard failure.",
+  "files": {"tests/test_notes.py": null}
+}

@@ -1,0 +1,7 @@
+{
+  "adapter": "fastapi-sqlite-v1",
+  "requires": ["notes_app/ranking.py"],
+  "match": "broken notes",
+  "summary": "Deliberate compile failure.",
+  "files": {"notes_app/ranking.py": "def rank(notes)\n    return notes\n"}
+}

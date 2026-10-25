@@ -18,6 +18,12 @@ class RepositoryError(ValueError):
 
 class Git:
     def run(self, root, *arguments):
+        try:
+            return self.run_bytes(root, *arguments).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RepositoryError("unsupported_filename", "Repository paths must be UTF-8") from error
+
+    def run_bytes(self, root, *arguments, input_data=None, output_limit=4 * 1024 * 1024):
         if droid_sandbox.availability_reason():
             raise RepositoryError("sandbox_unavailable", "Read-only Git sandbox unavailable", 503)
         with tempfile.TemporaryDirectory(prefix="paradox-git-") as temporary:
@@ -35,15 +41,11 @@ class Git:
                        "core.untrackedCache=false", "-c", "core.hooksPath=/dev/null", "-c",
                        "core.pager=cat", "-c", "diff.external=", "-c", "protocol.allow=never",
                        "-C", str(root), *arguments]
-            try:
-                output = self.capture(command, environment)
-                return output.decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise RepositoryError("unsupported_filename", "Repository paths must be UTF-8") from error
+            return self.capture(command, environment, input_data, output_limit)
 
-    def capture(self, command, environment):
+    def capture(self, command, environment, input_data=None, output_limit=4 * 1024 * 1024):
         try:
-            process = subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
+            process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         except OSError as error:
             raise RepositoryError("git_failed", "Git inspection could not start") from error
@@ -53,18 +55,34 @@ class Git:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ, "stdout")
                 selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+                if input_data:
+                    selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+                elif process.stdin:
+                    process.stdin.close()
+                pending = memoryview(input_data or b"")
                 while selector.get_map():
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise RepositoryError("git_timeout", "Git inspection timed out")
                     for key, unused in selector.select(remaining):
+                        if key.data == "stdin":
+                            try:
+                                written = os.write(key.fd, pending[:65536])
+                            except BrokenPipeError:
+                                written = len(pending)
+                            pending = pending[written:]
+                            if not pending:
+                                selector.unregister(key.fileobj)
+                                process.stdin.close()
+                            continue
                         chunk = os.read(key.fd, 65536)
                         if not chunk:
                             selector.unregister(key.fileobj)
                             continue
                         output[key.data].extend(chunk)
-                        if len(output[key.data]) > 4 * 1024 * 1024:
-                            raise RepositoryError("repository_too_large", "Git output exceeds the 4 MB limit")
+                        limit = output_limit if key.data == "stdout" else 4 * 1024 * 1024
+                        if len(output[key.data]) > limit:
+                            raise RepositoryError("repository_too_large", "Git output exceeds its size limit")
             if process.wait(timeout=max(0.01, deadline - time.monotonic())):
                 raise RepositoryError("invalid_repository", "Not a readable Git working repository")
             return bytes(output["stdout"])
@@ -78,6 +96,8 @@ class Git:
             process.wait()
             process.stdout.close()
             process.stderr.close()
+            if process.stdin:
+                process.stdin.close()
 
     def inspect(self, root):
         if root.resolve() != root or not root.is_dir() or (root / ".git").is_symlink() or not (root / ".git").is_dir():

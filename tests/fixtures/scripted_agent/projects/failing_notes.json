@@ -1,0 +1,7 @@
+{
+  "adapter": "fastapi-sqlite-v1",
+  "requires": ["tests/test_notes.py"],
+  "match": "failing notes",
+  "summary": "Deliberate test failure.",
+  "files": {"tests/test_generated_failure.py": "def test_generated_failure():\n    assert False, \"deliberate scripted failure\"\n"}
+}

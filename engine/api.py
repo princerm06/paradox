@@ -15,6 +15,9 @@ from starlette.concurrency import run_in_threadpool
 from engine.service import Conflict, Engine, Unavailable
 from engine.generations import Generations, InvalidGeneration
 from engine.repositories import repository_router
+from engine.repositories.git import RepositoryError
+from engine.projects import Projects
+from engine.projects.api import project_router
 
 
 class SproutRequest(BaseModel):
@@ -109,22 +112,30 @@ def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runti
         runtime_port,
     )
     generations = Generations(engine)
+    repositories = repository_router(engine.root, repository_roots, managed=False)
+    projects = Projects(repositories.registry)
 
     @asynccontextmanager
     async def lifespan(application):
         await run_in_threadpool(engine.start)
         try:
             await run_in_threadpool(generations.start)
+            await run_in_threadpool(repositories.registry.start)
+            await run_in_threadpool(projects.start)
             yield
         finally:
             try:
-                await run_in_threadpool(generations.close)
+                await run_in_threadpool(projects.shutdown)
             finally:
-                await run_in_threadpool(engine.close)
+                try:
+                    await run_in_threadpool(generations.close)
+                finally:
+                    await run_in_threadpool(engine.close)
 
     application = FastAPI(title="Paradox Timeline Engine", version="0.1.0", lifespan=lifespan)
     application.state.engine = engine
     application.state.generations = generations
+    application.state.projects = projects
 
     @application.middleware("http")
     async def authenticate(request, call_next):
@@ -149,6 +160,10 @@ def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runti
     @application.exception_handler(KeyError)
     async def missing(request, error):
         return JSONResponse(status_code=404, content={"detail": error.args[0]})
+
+    @application.exception_handler(RepositoryError)
+    async def repository_error(request, error):
+        return JSONResponse(status_code=error.status, content={"detail": {"code": error.code, "message": str(error)}})
 
     @application.exception_handler(Conflict)
     async def conflict(request, error):
@@ -268,7 +283,8 @@ def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runti
         app_prefix = urlsplit(public_app_url).path.rstrip("/") if public_app_url else request.scope.get("root_path", "").rstrip("/") + "/app"
         return await run_in_threadpool(forward, path, request.method, request.query_params.multi_items(), request.headers, body, app_prefix)
 
-    application.include_router(repository_router(engine.root, repository_roots))
+    application.include_router(repositories)
+    application.include_router(project_router(projects, repositories.authorize, repositories.authorize_shell))
     return application
 
 

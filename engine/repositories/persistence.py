@@ -22,9 +22,17 @@ class Summary(StrictModel):
     registered_at: str
 
 
+class RepositoryTrust(StrictModel):
+    repository_id: str
+    configuration_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    granted_at: str
+    source: Literal["picker", "configured"]
+
+
 class StoredRegistration(StrictModel):
     repository: Summary
     configuration: Optional[AdapterConfig] = None
+    trust: Optional[RepositoryTrust] = None
 
 
 class Document(StrictModel):
@@ -56,13 +64,16 @@ class RepositoryStore:
             roots = [item.repository.root for item in document.repositories]
             if len(set(ids)) != len(ids) or len(set(roots)) != len(roots):
                 raise ValueError("Duplicate registration")
+            if any(item.trust and item.trust.repository_id != item.repository.id for item in document.repositories):
+                raise ValueError("Mismatched trust registration")
             return document.repositories
         except (OSError, ValueError, ValidationError) as error:
             raise RepositoryError("registry_unavailable", "Repository registry is invalid or unreadable", 503) from error
 
-    def save(self, entries, configurations):
+    def save(self, entries, configurations, trusts=None):
         payload = json.dumps({"schema_version": 1, "repositories": [
-            {"repository": entry, "configuration": configurations.get(entry["id"])}
+            {"repository": entry, "configuration": configurations.get(entry["id"]),
+             "trust": (trusts or {}).get(entry["id"])}
             for entry in entries.values()
         ]}, ensure_ascii=True, indent=2).encode()
         if len(payload) > MAX_BYTES:
