@@ -3,12 +3,16 @@ import importlib.util
 from pathlib import Path
 import shutil
 import sys
+import time
 
+import httpx
 import pytest
 
 from engine.adapters.fastapi_sqlite import ADAPTER
+from engine.generations import Generations
 from engine.jobs import Cancelled, JobControl
 from engine.providers import Providers
+from engine.service import Engine
 from engine.validation import (baseline_test_count, changes, compile_command, files,
                                guard, pytest_command, require_test_success,
                                test_counts as read_test_counts, validate_runtime, validation_run)
@@ -203,3 +207,68 @@ def test_project_boot_fails_closed_when_sandbox_is_unavailable(workspace, monkey
                          lambda *check: recorded.append(check), profile)
     assert recorded == []
     assert not list((base / 'state').iterdir())
+
+
+def test_project_generation_worker_adopts_and_recovers_a_real_future(workspace):
+    source, directory, base, code, profile = workspace
+    root = directory / 'managed-engine'
+    engine = Engine(root, base / 'code', 0, profile=profile)
+    engine.start()
+    generations = Generations(engine)
+    generations.start()
+    try:
+        parent_id = engine.active_id
+        generation = generations.create(parent_id, 'prioritize notes', 'Priority future', 'scripted', False)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            result = generations.get(generation['id'])
+            if result['status'] in {'succeeded', 'failed', 'cancelled'}:
+                break
+            time.sleep(0.05)
+        assert result['status'] == 'succeeded', result
+        assert result['evaluation']['passed']
+        assert result['evaluation']['tests'] == {'passed': 5, 'failed': 0, 'errors': 0}
+        assert [check['name'] for check in result['evaluation']['checks']] == ['agent', 'guard', 'compile', 'tests', 'boot', 'smoke']
+        assert result['agent']['usage']['factory_credits'] is None
+        assert 'note["priority"]' in generations.diff(generation['id'])
+        assert any('GET /health 200' in line for line in generations.logs(generation['id'], 'validation', 200)['lines'])
+        future_id = result['timeline_id']
+        future = engine.view(future_id)
+        assert future['generation_id'] == generation['id'] and future['parent_id'] == parent_id
+        assert engine.active_id == parent_id
+        with httpx.Client(base_url=engine.runtime.url, trust_env=False) as client:
+            assert client.get('/api/notes').json()['ordering'] == 'chronological'
+            assert client.post('/api/notes', json={'content': 'Parent late write', 'priority': 2}).status_code == 201
+        with engine.gate:
+            engine.activate(future_id)
+        with httpx.Client(base_url=engine.runtime.url, trust_env=False) as client:
+            notes = client.get('/api/notes').json()
+            assert notes['ordering'] == 'priority'
+            assert [note['priority'] for note in notes['notes']] == [8, 1]
+            assert client.post('/api/notes', json={'content': 'Future only', 'priority': 9}).status_code == 201
+        with engine.gate:
+            engine.activate(parent_id)
+        with httpx.Client(base_url=engine.runtime.url, trust_env=False) as client:
+            original = client.get('/api/notes').json()
+            assert original['ordering'] == 'chronological'
+            assert 'Parent late write' in {note['content'] for note in original['notes']}
+            assert 'Future only' not in {note['content'] for note in original['notes']}
+        with engine.gate:
+            engine.activate(future_id)
+    finally:
+        generations.close()
+        engine.close()
+    restarted = Engine(root, base / 'code', 0, profile=profile)
+    restarted.start()
+    recovered = Generations(restarted)
+    recovered.start()
+    try:
+        assert restarted.active_id == future_id
+        assert recovered.get(generation['id']) == result
+        with httpx.Client(base_url=restarted.runtime.url, trust_env=False) as client:
+            notes = client.get('/api/notes').json()
+            assert 'Future only' in {note['content'] for note in notes['notes']}
+            assert 'Parent late write' not in {note['content'] for note in notes['notes']}
+    finally:
+        recovered.close()
+        restarted.close()
