@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from engine.service import Conflict, Engine, Unavailable
 from engine.generations import Generations, InvalidGeneration
+from engine.repositories import repository_router
 
 
 class SproutRequest(BaseModel):
@@ -89,7 +90,7 @@ HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriz
 ENGINE_CREDENTIAL_HEADERS = {"authorization", "x-paradox-shell-token"}
 
 
-def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runtime_source: Optional[Path] = None, app_url: Optional[str] = None):
+def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runtime_source: Optional[Path] = None, app_url: Optional[str] = None, repository_roots: Optional[List[Path]] = None):
     token = os.environ.get("PARADOX_TOKEN")
     origins = [origin.strip() for origin in os.environ.get("PARADOX_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173").split(",") if origin.strip()]
     for origin in origins:
@@ -267,6 +268,7 @@ def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runti
         app_prefix = urlsplit(public_app_url).path.rstrip("/") if public_app_url else request.scope.get("root_path", "").rstrip("/") + "/app"
         return await run_in_threadpool(forward, path, request.method, request.query_params.multi_items(), request.headers, body, app_prefix)
 
+    application.include_router(repository_router(engine.root, repository_roots))
     return application
 
 
