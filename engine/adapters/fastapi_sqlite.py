@@ -103,7 +103,7 @@ class FastAPISQLiteAdapter:
             state_env=config.state_env, editable_prefixes=("",), immutable_paths=IMMUTABLE,
             protected_tests_prefix=config.tests.rstrip("/") + "/",
             sqlite_state_globs=("**/*.sqlite3", "**/*.sqlite", "**/*.db"),
-            execution="sandboxed", providers=("scripted",),
+            execution="sandboxed", providers=("scripted", "droid"),
         )
 
     def preflight(self, code, profile):

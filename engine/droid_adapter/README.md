@@ -102,7 +102,10 @@ The adapter imports these from `@factory/droid-sdk/node`:
 
 - `createSession(options)`, called with:
   - `cwd`: the canonical workspace.
-  - `autonomyLevel: AutonomyLevel.Off`, so the CLI asks before every action.
+  - `autonomyLevel: AutonomyLevel.Off`. Read/Edit/Create are explicitly enabled
+    through `session.updateSettings({enabledToolIds: [...]})`. Do not assume
+    every edit invokes the permission handler; the kernel write sandbox is
+    mandatory and handler invocation counts are audited.
   - `disabledToolIds`: every non-file tool known to SDK 0.10.0. This covers
     `Execute`, `Script`, `WaitForScript`, `WebSearch`, `FetchUrl`, `Task`,
     `SpawnAgent`, `AskUser`, the mission/workstream tools, connectors,

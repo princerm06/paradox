@@ -18,7 +18,7 @@
  * itself. This file never prints or forwards the key.
  */
 
-import { accessSync, constants as fsConstants, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants as fsConstants, mkdtempSync, openSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -37,6 +37,14 @@ import type {
 export interface AdapterInput {
   cwd: string;
   prompt: string;
+  project?: ProjectPolicy;
+}
+
+export interface ProjectPolicy {
+  adapter: 'fastapi-sqlite-v1';
+  editable_prefixes: string[];
+  immutable_paths: string[];
+  protected_files: string[];
 }
 
 export interface AdapterUsage {
@@ -114,6 +122,9 @@ const EDIT_CONFIRMATION_TYPES = new Set(['edit', 'create', 'apply_patch']);
 
 /** Path segments an approved edit may never touch. */
 const FORBIDDEN_SEGMENTS = new Set(['.git', 'node_modules']);
+const IMPORTED_ALLOWED_TOOLS = new Set(['Read', 'Edit', 'Create', 'LS', 'Grep', 'Glob', 'TodoWrite']);
+const IMPORTED_CONTROL_NAMES = new Set(['conftest.py', 'pytest.ini', '.pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml', 'sitecustomize.py', 'usercustomize.py', 'agents.md']);
+const IMPORTED_AUTOLOAD_NAMES = new Set(['.factory', '.claude', '.agents', '.codex', '.mcp.json']);
 
 const PROCEED_ONCE = 'proceed_once';
 const CANCEL = 'cancel';
@@ -214,6 +225,64 @@ export function decidePermission(root: string, request: PermissionRequest, write
   return { outcome: PROCEED_ONCE, reason: `approved ${toolUses.map(describeToolUse).join(', ')}` };
 }
 
+function relativePolicyPath(value: unknown, empty = false): value is string {
+  return typeof value === 'string' && value.length <= 1024 && (empty || value.length > 0)
+    && !path.posix.isAbsolute(value) && !value.includes('\\') && !value.includes('\0')
+    && (value === '' || path.posix.normalize(value) === value)
+    && !value.split('/').some((segment) => segment === '..' || segment === '.');
+}
+
+export function parseProjectPolicy(value: unknown): ProjectPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid imported-project policy');
+  const policy = value as Record<string, unknown>;
+  if (policy.adapter !== 'fastapi-sqlite-v1'
+      || Object.keys(policy).sort().join(',') !== 'adapter,editable_prefixes,immutable_paths,protected_files') {
+    throw new Error('Unsupported imported-project policy');
+  }
+  for (const name of ['editable_prefixes', 'immutable_paths', 'protected_files']) {
+    const values = policy[name];
+    if (!Array.isArray(values) || values.length > 10000 || (name === 'editable_prefixes' && !values.length)
+        || values.some((entry) => !relativePolicyPath(entry, name === 'editable_prefixes')
+          || (name === 'editable_prefixes' && entry !== '' && !entry.endsWith('/'))
+          || (name !== 'immutable_paths' && /[*?\[\]]/.test(entry))
+          || (name === 'immutable_paths' && /[?\[\]]/.test(entry)))) {
+      throw new Error('Invalid imported-project policy ' + name);
+    }
+  }
+  return policy as unknown as ProjectPolicy;
+}
+
+function immutableProjectPath(relative: string, policy: ProjectPolicy): boolean {
+  const segments = relative.split('/');
+  const name = path.posix.basename(relative).toLowerCase();
+  return policy.protected_files.includes(relative)
+    || IMPORTED_CONTROL_NAMES.has(name) || name.endsWith('.pth')
+    || segments.some((segment) => IMPORTED_AUTOLOAD_NAMES.has(segment.toLowerCase()))
+    || policy.immutable_paths.some((pattern) => {
+      const expression = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+      return new RegExp('^' + expression + '$').test(pattern.includes('/') ? relative : path.posix.basename(relative));
+    });
+}
+
+export function decideProjectPermission(root: string, request: PermissionRequest, policy: ProjectPolicy): PermissionDecision {
+  const decision = decidePermission(root, request, root);
+  if (decision.outcome !== PROCEED_ONCE) return decision;
+  for (const item of request.toolUses) {
+    const details = item.details ?? {};
+    const paths = [details.filePath, ...(Array.isArray(details.files) ? details.files : []).flatMap((file) => [file.filePath, file.moveTo])]
+      .filter((candidate): candidate is string => candidate !== undefined);
+    for (const target of paths) {
+      const relative = path.relative(realpathSync(root), canonicalize(root, target));
+      if (target.includes('\\') || target.split('/').includes('..')
+          || !policy.editable_prefixes.some((prefix) => relative.startsWith(prefix))
+          || immutableProjectPath(relative, policy)) {
+        return { outcome: CANCEL, reason: 'imported-project path is protected or outside editable prefixes' };
+      }
+    }
+  }
+  return decision;
+}
+
 // ---------------------------------------------------------------------------
 // Sanitization / output helpers
 // ---------------------------------------------------------------------------
@@ -298,7 +367,7 @@ export function parseInput(raw: string): AdapterInput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('stdin must be a JSON object');
   }
-  const { cwd, prompt } = value as Record<string, unknown>;
+  const { cwd, prompt, project } = value as Record<string, unknown>;
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
     throw new Error('"cwd" must be an absolute path string');
   }
@@ -312,7 +381,7 @@ export function parseInput(raw: string): AdapterInput {
     isDir = false;
   }
   if (!isDir) throw new Error('"cwd" does not exist or is not a directory');
-  return { cwd: realpathSync(cwd), prompt };
+  return { cwd: realpathSync(cwd), prompt, ...(project === undefined ? {} : { project: parseProjectPolicy(project) }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -353,9 +422,12 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
   }
 
   const root = input.cwd;
+  let project: ProjectPolicy | undefined;
   const modelId = env.PARADOX_DROID_MODEL?.trim() || DEFAULT_MODEL_ID;
   let session: Awaited<ReturnType<RunnerDeps['createSession']>> | null = null;
   try {
+    project = input.project === undefined ? undefined : parseProjectPolicy(input.project);
+    const disabledTools = [...DISABLED_TOOL_IDS, ...(project ? ['ToolSearch'] : [])];
     let models: Awaited<ReturnType<RunnerDeps['listModels']>>;
     try {
       models = await deps.listModels({ cwd: root, includeDisabled: true });
@@ -373,13 +445,16 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
       cwd: root,
       modelId,
       autonomyLevel: deps.autonomyOff,
-      disabledToolIds: [...DISABLED_TOOL_IDS],
+      disabledToolIds: disabledTools,
+      ...(project ? { mcpServers: [] } : {}),
       autoRejectPermissionRequests: false,
       disableBuiltinSkills: true,
       abortSignal: deps.abortSignal,
       permissionHandler: (params): RequestPermissionHandlerResult => {
         permissionCalls += 1;
-        const decision = decidePermission(root, params as unknown as PermissionRequest, path.join(root, 'demo_app'));
+        const decision = project
+          ? decideProjectPermission(root, params as unknown as PermissionRequest, project)
+          : decidePermission(root, params as unknown as PermissionRequest, path.join(root, 'demo_app'));
         log(`permission ${decision.outcome}: ${decision.reason}`);
         return decision.outcome as RequestPermissionHandlerResult;
       },
@@ -398,7 +473,7 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
       }
     };
     verifySettings();
-    const overrides = { enabledToolIds: ['Read', 'Edit', 'Create'], disabledToolIds: [...DISABLED_TOOL_IDS] };
+    const overrides = { enabledToolIds: ['Read', 'Edit', 'Create'], disabledToolIds: disabledTools };
     try {
       await session.updateSettings(overrides);
     } catch (error) {
@@ -409,7 +484,7 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
     log(`session model: ${session.settings.modelId}; tool execution mode: ${mode}; autonomy: ${session.settings.autonomyLevel}; explicitly enabled: Read, Edit, Create`);
     let tools: Awaited<ReturnType<DroidSession['listTools']>>;
     try {
-      tools = await session.listTools({ toolIds: ['Read', 'Edit', 'Create'] });
+      tools = project ? await session.listTools() : await session.listTools({ toolIds: ['Read', 'Edit', 'Create'] });
     } catch (error) {
       throw new Error(`Cannot verify direct file tools for Droid model "${modelId}" (mode ${mode}): ${errorText(error)}`);
     }
@@ -420,6 +495,11 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
     const unavailableTools = ['Read', 'Edit', 'Create'].filter((id) => !tools.some((tool) => tool.id === id && tool.allowed === true));
     if (unavailableTools.length) {
       throw new Error(`Droid model "${modelId}" (mode ${mode}) lacks allowed required file tools: ${unavailableTools.join(', ')}. Read, Edit and Create must each report allowed=true before streaming. Check model/organization tool permissions; AutonomyLevel.Off and shell restrictions remain unchanged.`);
+    }
+    if (project) {
+      const unexpected = tools.filter((tool) => tool.allowed === true && !IMPORTED_ALLOWED_TOOLS.has(tool.id));
+      if (unexpected.length) throw new Error('Imported-project tool catalog contains unexpected allowed tools: ' + unexpected.map((tool) => tool.id).join(', '));
+      log('imported-project tool catalog verified; unexpected tools rejected; no scripted fallback');
     }
 
     for await (const message of session.stream(input.prompt, { abortSignal: deps.abortSignal })) {
@@ -455,7 +535,46 @@ export async function runAdapter(input: AdapterInput, deps: RunnerDeps): Promise
   }
 }
 
-export function verifyWriteSandbox(root: string, env = process.env, platform = process.platform): void {
+export function verifyWriteSandbox(root: string, env = process.env, platform = process.platform, project?: ProjectPolicy): void {
+  if (project) {
+    if (platform !== 'darwin' || env.PARADOX_DROID_SANDBOX !== 'macos-project-write-v1') {
+      throw new Error('Imported Droid requires the engine-managed imported-project write sandbox; no unsandboxed fallback');
+    }
+    parseProjectPolicy(project);
+    const outside = path.join(path.dirname(root), `.sdk-outside-denied-${randomUUID()}`);
+    let inside: string | undefined;
+    let outsideCreated = false;
+    try {
+      inside = mkdtempSync(path.join(root, '.sdk-inside-allowed-'));
+      writeFileSync(path.join(inside, 'probe'), 'allowed');
+      try {
+        writeFileSync(outside, 'must be denied', { flag: 'wx' });
+        outsideCreated = true;
+      } catch (error) {
+        if (!['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      }
+      if (outsideCreated) throw new Error('Imported Droid sandbox permits writes outside future code');
+      for (const relative of project.protected_files) {
+        const target = path.join(root, relative);
+        if (!isEditablePath(root, target) || !statSync(target).isFile() || statSync(target).nlink !== 1) {
+          throw new Error('Imported Droid protected file is unsafe');
+        }
+        let descriptor: number;
+        try {
+          descriptor = openSync(target, fsConstants.O_WRONLY);
+        } catch (error) {
+          if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+          throw error;
+        }
+        closeSync(descriptor);
+        throw new Error('Imported Droid sandbox permits writes to a protected file');
+      }
+    } finally {
+      if (inside) rmSync(inside, { recursive: true, force: true });
+      if (outsideCreated) rmSync(outside, { force: true });
+    }
+    return;
+  }
   if (platform !== 'darwin' || env.PARADOX_DROID_SANDBOX !== 'macos-write-v1') {
     throw new Error('Droid requires the engine-managed macOS write sandbox; no unsandboxed fallback');
   }
@@ -564,7 +683,7 @@ export async function main(argv: string[]): Promise<number> {
 
   let sdk: typeof import('@factory/droid-sdk/node');
   try {
-    verifyWriteSandbox(input.cwd);
+    verifyWriteSandbox(input.cwd, process.env, process.platform, input.project);
     sdk = await import('@factory/droid-sdk/node');
   } catch (error) {
     const text = `Droid sandbox/SDK initialization failed: ${errorText(error)}`;

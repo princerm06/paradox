@@ -6,8 +6,6 @@ import sys
 
 
 def terminate(child):
-    if child.poll() is not None:
-        return
     try:
         os.killpg(child.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -15,11 +13,13 @@ def terminate(child):
     try:
         child.wait(timeout=1)
     except subprocess.TimeoutExpired:
+        pass
+    finally:
         try:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        child.wait(timeout=3)
+    child.wait(timeout=3)
 
 
 def supervise(arguments):
