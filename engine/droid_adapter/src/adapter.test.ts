@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -13,10 +13,13 @@ import {
   EXIT_OK,
   EXIT_RUN_FAILED,
   type PermissionRequest,
+  type ProjectPolicy,
   type RunnerDeps,
   decidePermission,
+  decideProjectPermission,
   isEditablePath,
   parseInput,
+  parseProjectPolicy,
   probe,
   runAdapter,
   sanitize,
@@ -594,6 +597,120 @@ describe('runAdapter', () => {
     assert.ok(h.emitted.some((message) => message.type === 'log' && message.message.includes('permission proceed_once')));
     assert.ok(h.emitted.some((message) => message.type === 'log' && message.message === 'permission handler audit: invoked=1'));
     rmSync(target);
+  });
+});
+
+describe('imported-project policy', () => {
+  const imported = path.join(workspace, 'imported-code');
+  mkdirSync(path.join(imported, 'notes_app'), { recursive: true });
+  mkdirSync(path.join(imported, 'tests'), { recursive: true });
+  writeFileSync(path.join(imported, 'requirements.txt'), 'fastapi\n');
+  writeFileSync(path.join(imported, 'tests', 'test_original.py'), 'def test_original(): pass\n');
+  symlinkSync(path.join(workspace, 'outside'), path.join(imported, 'escape'));
+  symlinkSync(path.join(imported, 'requirements.txt'), path.join(imported, 'manifest-alias'));
+  const policy: ProjectPolicy = {
+    adapter: 'fastapi-sqlite-v1', editable_prefixes: [''],
+    immutable_paths: ['requirements*.txt', 'pyproject.toml', 'Pipfile*'],
+    protected_files: ['requirements.txt', 'tests/test_original.py'],
+  };
+  const input = { cwd: imported, prompt: 'Add a custom notes capability and a test', project: policy };
+
+  it('parses only the agreed bounded internal policy', () => {
+    assert.deepEqual(parseInput(JSON.stringify(input)), { ...input, cwd: realpathSync(imported) });
+    for (const invalid of [null, {}, { ...policy, adapter: 'node' }, { ...policy, shell: true },
+      { ...policy, protected_files: ['../source.py'] }, { ...policy, protected_files: ['/etc/passwd'] },
+      { ...policy, editable_prefixes: [] }, { ...policy, immutable_paths: ['requirements?.txt'] }]) {
+      assert.throws(() => parseProjectPolicy(invalid));
+    }
+  });
+
+  for (const target of ['notes_app/new.py', 'tests/test_new.py', path.join(imported, 'notes_app/absolute.py')]) {
+    it('allows an isolated editable file: ' + path.basename(target), () => {
+      assert.equal(decideProjectPermission(imported, request({ details: { type: 'create', filePath: target } }), policy).outcome, 'proceed_once');
+    });
+  }
+
+  for (const target of ['../source.py', '/etc/passwd', 'escape/x.py', 'manifest-alias', 'notes_app/../x.py',
+    'requirements.txt', 'nested/requirements-new.txt', 'tests/test_original.py', 'notes_app/conftest.py',
+    '.factory/settings.json', 'nested/.claude/hooks.py', '.mcp.json', '.git/config', 'node_modules/x.js', 'AGENTS.md']) {
+    it('denies imported protected or escaping path: ' + target, () => {
+      assert.equal(decideProjectPermission(imported, request({ details: { type: 'edit', filePath: target } }), policy).outcome, 'cancel');
+    });
+  }
+
+  it('enforces editable prefixes, all patch destinations and non-file denials', () => {
+    assert.equal(decideProjectPermission(imported, request({ details: { type: 'create', filePath: 'README.md' } }),
+      { ...policy, editable_prefixes: ['notes_app/'] }).outcome, 'cancel');
+    assert.equal(decideProjectPermission(imported, request({ details: { type: 'apply_patch', files: [
+      { filePath: 'notes_app/new.py', moveTo: '../source.py' },
+    ] } }), policy).outcome, 'cancel');
+    for (const type of ['exec', 'script', 'mcp']) {
+      assert.equal(decideProjectPermission(imported, request({ details: { type, filePath: 'notes_app/x.py' } }), policy).outcome, 'cancel');
+    }
+  });
+
+  it('routes real mocked SDK edits through the imported permission handler', async () => {
+    const h = harness([]);
+    const original = h.deps.createSession;
+    h.deps.createSession = async (options) => {
+      const session = await original(options);
+      return { ...session, async *stream(prompt) {
+        assert.equal(prompt, input.prompt);
+        assert.equal(await options.permissionHandler!(request({ details: { type: 'create', filePath: 'notes_app/generated.py' } }) as never), 'proceed_once');
+        writeFileSync(path.join(imported, 'notes_app/generated.py'), 'VALUE = "open ended request"\n');
+        assert.equal(await options.permissionHandler!(request({ details: { type: 'edit', filePath: 'requirements.txt' } }) as never), 'cancel');
+        yield { type: 'result', success: true, sessionId: 'sess-imported', text: 'Implemented requested files', tokenUsage: null } as never;
+      } };
+    };
+    assert.equal(await runAdapter(input, h.deps), EXIT_OK);
+    assert.match(readFileSync(path.join(imported, 'notes_app/generated.py'), 'utf8'), /open ended/);
+    assert.equal(h.captured.options!.cwd, imported);
+    assert.equal(h.captured.options!.autonomyLevel, 'off');
+    assert.deepEqual(h.captured.options!.mcpServers, []);
+    assert.ok(h.captured.options!.disabledToolIds!.includes('ToolSearch'));
+    assert.ok(h.emitted.some((message) => message.type === 'log' && message.message === 'permission handler audit: invoked=2'));
+    assert.equal(h.captured.closed, true);
+  });
+
+  for (const outcome of ['denied', 'interrupted', 'exception']) {
+    it('closes the imported SDK session after ' + outcome, async () => {
+      const h = harness([]);
+      const original = h.deps.createSession;
+      h.deps.createSession = async (options) => ({ ...await original(options), async *stream() {
+        assert.equal(await options.permissionHandler!(request({ details: { type: 'edit', filePath: 'requirements.txt' } }) as never), 'cancel');
+        if (outcome === 'exception') throw new Error('mock transport failed');
+        yield { type: 'result', success: false, interrupted: outcome === 'interrupted',
+          sessionId: 'sess-imported-failed', error: { message: 'permission denied' } } as never;
+      } });
+      assert.equal(await runAdapter(input, h.deps), outcome === 'interrupted' ? EXIT_INTERRUPTED : EXIT_RUN_FAILED);
+      assert.equal(h.captured.closed, true);
+      assert.equal(readFileSync(path.join(imported, 'requirements.txt'), 'utf8'), 'fastapi\n');
+      assert.ok(h.emitted.some((message) => message.type === 'log' && message.message === 'permission handler audit: invoked=1'));
+    });
+  }
+
+  for (const tool of ['Execute', 'Script', 'ToolSearch', 'mcp_unexpected', 'UnknownFutureTool']) {
+    it('rejects unexpected allowed tool before streaming: ' + tool, async () => {
+      const h = harness([]);
+      const original = h.deps.createSession;
+      let streamed = false;
+      h.deps.createSession = async (options) => ({ ...await original(options),
+        async listTools() { return [
+          { id: 'Read', allowed: true }, { id: 'Edit', allowed: true }, { id: 'Create', allowed: true },
+          { id: tool, allowed: true },
+        ] as never; },
+        async *stream() { streamed = true; },
+      });
+      assert.equal(await runAdapter(input, h.deps), EXIT_RUN_FAILED);
+      assert.equal(streamed, false);
+      assert.equal(h.captured.closed, true);
+      assert.ok(h.emitted.some((message) => message.type === 'result' && message.summary?.includes('unexpected allowed tools')));
+    });
+  }
+
+  it('rejects a forged imported sandbox marker without starting the SDK', () => {
+    assert.throws(() => verifyWriteSandbox(imported, {}, 'darwin', policy), /imported-project write sandbox/);
+    assert.throws(() => verifyWriteSandbox(imported, { PARADOX_DROID_SANDBOX: 'macos-project-write-v1' }, 'darwin', policy), /permits writes outside future code/);
   });
 });
 
