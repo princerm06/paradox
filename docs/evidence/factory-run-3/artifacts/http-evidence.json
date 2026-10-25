@@ -1,0 +1,340 @@
+{
+  "verified": true,
+  "sdk_version": "0.10.0",
+  "generation_post_attempts": 1,
+  "agents": {
+    "default": "droid",
+    "providers": [
+      {
+        "id": "droid",
+        "available": true,
+        "reason": null
+      },
+      {
+        "id": "scripted",
+        "available": true,
+        "reason": null
+      },
+      {
+        "id": "claude",
+        "available": false,
+        "reason": "optional Claude provider is not enabled"
+      }
+    ]
+  },
+  "generation_id": "1c98d768-d602-4e6b-b68c-99203bc505ea",
+  "prompt": "Rank the feed by popularity, most liked first. Add a test.",
+  "submitted": {
+    "id": "1c98d768-d602-4e6b-b68c-99203bc505ea",
+    "parent_id": "b92b27e1-6e41-4d63-be13-3ff68f2e8f84",
+    "name": "Live official SDK proof",
+    "prompt": "Rank the feed by popularity, most liked first. Add a test.",
+    "provider": "droid",
+    "status": "queued",
+    "timeline_id": null,
+    "base_snapshot_id": null,
+    "activate_on_success": false,
+    "created_at": "2026-10-24T08:52:45.534284+00:00",
+    "updated_at": "2026-10-24T08:52:45.534318+00:00",
+    "finished_at": null,
+    "agent": null,
+    "changes": null,
+    "evaluation": null,
+    "error": null
+  },
+  "observed_statuses": [
+    "queued",
+    "preparing",
+    "generating",
+    "validating",
+    "succeeded"
+  ],
+  "generation": {
+    "id": "1c98d768-d602-4e6b-b68c-99203bc505ea",
+    "parent_id": "b92b27e1-6e41-4d63-be13-3ff68f2e8f84",
+    "name": "Live official SDK proof",
+    "prompt": "Rank the feed by popularity, most liked first. Add a test.",
+    "provider": "droid",
+    "status": "succeeded",
+    "timeline_id": "e707847b-6d1b-4b86-a11a-582c59c72d6c",
+    "base_snapshot_id": "61c0ba1e-640f-4d29-9c00-c00e243bc845",
+    "activate_on_success": false,
+    "created_at": "2026-10-24T08:52:45.534284+00:00",
+    "updated_at": "2026-10-24T08:53:15.181756+00:00",
+    "finished_at": "2026-10-24T08:53:15.181742+00:00",
+    "agent": {
+      "exit_code": 0,
+      "session_id": "9314e994-adfb-4f2e-8ee3-2a02a8026228",
+      "summary": "Done. Here's what changed and what the tests cover.\n\n**`ranking.py`** — two-line change:\n- `ORDERING` is now `\"popular\"`.\n- `rank` sorts by `(likes, created_at, id)` descending, so the most-liked post always comes first. Ties on likes fall back to recency, then to ID, keeping the order deterministic.\n\n**`tests/test_popular_ranking.py`** — eight tests:\n\n| Test | What it proves |\n|---|---|\n| `test_ordering_label_is_popular` | `ORDERING == \"popular\"` |\n| `test_more_liked_post_ranks_first` | Higher likes beats newer `created_at` |\n| `test_like_count_beats_recency` | Explicit newer-but-unpopular vs older-but-popular case |\n| `test_equal_likes_broken_by_recency_then_id` | Tie-breaking falls to `created_at` then `id` |\n| `test_rank_does_not_mutate_input` | Input list and dicts are unchanged |\n| `test_api_ordering_field_is_popular` | `GET /api/posts` returns `\"ordering\": \"popular\"` |\n| `test_api_feed_is_sorted_by_likes_descending` | Live feed order matches descending like counts |\n| `test_health_reports_popular_ordering` | Both `/health` and `/api/health` report `\"popular\"` |",
+      "usage": {
+        "input_tokens": 414,
+        "output_tokens": 2625,
+        "factory_credits": 42278
+      },
+      "duration_ms": 26717
+    },
+    "changes": {
+      "files": [
+        {
+          "path": "demo_app/ranking.py",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "demo_app/tests/test_popular_ranking.py",
+          "status": "added",
+          "additions": 75,
+          "deletions": 0
+        }
+      ]
+    },
+    "evaluation": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "agent",
+          "status": "passed",
+          "duration_ms": 26717,
+          "detail": null
+        },
+        {
+          "name": "guard",
+          "status": "passed",
+          "duration_ms": 6,
+          "detail": null
+        },
+        {
+          "name": "compile",
+          "status": "passed",
+          "duration_ms": 161,
+          "detail": null
+        },
+        {
+          "name": "tests",
+          "status": "passed",
+          "duration_ms": 1611,
+          "detail": "26 passed"
+        },
+        {
+          "name": "boot",
+          "status": "passed",
+          "duration_ms": 295,
+          "detail": null
+        },
+        {
+          "name": "smoke",
+          "status": "passed",
+          "duration_ms": 8,
+          "detail": "GET /health 200, GET /api/posts 200"
+        }
+      ],
+      "tests": {
+        "passed": 26,
+        "failed": 0,
+        "errors": 0
+      },
+      "boot_ms": 295
+    },
+    "error": null
+  },
+  "agent_logs": {
+    "stream": "agent",
+    "lines": [
+      "Droid macOS write sandbox verified: demo_app only; private Factory home and scratch; network allowed",
+      "{\"type\":\"log\",\"message\":\"session started: 9314e994-adfb-4f2e-8ee3-2a02a8026228\"}",
+      "{\"type\":\"log\",\"message\":\"session model: claude-sonnet-4-6; tool execution mode: direct_only; autonomy: off; explicitly enabled: Read, Edit, Create\"}",
+      "{\"type\":\"log\",\"message\":\"file tool catalog: Read (allowed=true, defaultAllowed=true), Edit (allowed=true, defaultAllowed=false), Create (allowed=true, defaultAllowed=false)\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: LS\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: LS\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: LS\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: LS\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: Read\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: Edit\"}",
+      "{\"type\":\"log\",\"message\":\"assistant: Two changes: update `ranking.py`, then add the test.\"}",
+      "{\"type\":\"log\",\"message\":\"permission proceed_once: approved Edit\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: Edit\"}",
+      "{\"type\":\"log\",\"message\":\"tool_call: Create\"}",
+      "{\"type\":\"log\",\"message\":\"permission proceed_once: approved Create\"}",
+      "{\"type\":\"log\",\"message\":\"tool_result: Create\"}",
+      "{\"type\":\"log\",\"message\":\"assistant: Done. Here's what changed and what the tests cover.\\n\\n**`ranking.py`** — two-line change:\\n- `ORDERING` is now `\\\"popular\\\"`.\\n- `rank` sorts by `(likes, created_at, id)` descending, so the most-liked post always comes first. Ties on likes fall back to recency, then to ID, keeping the order deterministic.\\n\\n**`tests/test_popular_ranking.py`** — eight tests:\\n\\n| Test | What it proves |\\n|---|---|\\n| `test_ordering_label_is_popular` | `ORDERING == \\\"popular\\\"` |\\n| `test_more_liked_post_ranks_first` | Higher likes beats newer `created_at` |\\n| `test_like_count_beats_recency` | Explicit newer-but-unpopular vs older-but-popular case |\\n| `test_equal_likes_broken_by_recency_then_id` | Tie-breaking falls to `created_at` then `id` |\\n| `test_rank_does_not_mutate_input` | Input list and dicts are unchanged |\\n| `test_api_ordering_field_is_popular` | `GET /api/posts` returns `\\\"ordering\\\": \\\"popular\\\"` |\\n| `test_api_feed_is_sorted_by_likes_descending` | Live feed order matches descending like counts |\\n| `test_health_reports_popular_ordering` | Both `/health` and `/api/health` report `\\\"popular\\\"` |\"}",
+      "{\"type\":\"log\",\"message\":\"permission handler audit: invoked=2\"}",
+      "{\"type\":\"result\",\"exit_code\":0,\"session_id\":\"9314e994-adfb-4f2e-8ee3-2a02a8026228\",\"summary\":\"Done. Here's what changed and what the tests cover.\\n\\n**`ranking.py`** — two-line change:\\n- `ORDERING` is now `\\\"popular\\\"`.\\n- `rank` sorts by `(likes, created_at, id)` descending, so the most-liked post always comes first. Ties on likes fall back to recency, then to ID, keeping the order deterministic.\\n\\n**`tests/test_popular_ranking.py`** — eight tests:\\n\\n| Test | What it proves |\\n|---|---|\\n| `test_ordering_label_is_popular` | `ORDERING == \\\"popular\\\"` |\\n| `test_more_liked_post_ranks_first` | Higher likes beats newer `created_at` |\\n| `test_like_count_beats_recency` | Explicit newer-but-unpopular vs older-but-popular case |\\n| `test_equal_likes_broken_by_recency_then_id` | Tie-breaking falls to `created_at` then `id` |\\n| `test_rank_does_not_mutate_input` | Input list and dicts are unchanged |\\n| `test_api_ordering_field_is_popular` | `GET /api/posts` returns `\\\"ordering\\\": \\\"popular\\\"` |\\n| `test_api_feed_is_sorted_by_likes_descending` | Live feed order matches descending like counts |\\n| `test_health_reports_popular_ordering` | Both `/health` and `/api/health` report `\\\"popular\\\"` |\",\"usage\":{\"input_tokens\":414,\"output_tokens\":2625,\"factory_credits\":42278}}"
+    ]
+  },
+  "validation_logs": {
+    "stream": "validation",
+    "lines": [
+      "agent: passed",
+      "guard: passed",
+      "compile: passed",
+      "demo_app/tests/test_feed_contract.py::test_feed_exposes_existing_post_contract",
+      "demo_app/tests/test_feed_contract.py::test_health_aliases_and_page_remain_available",
+      "demo_app/tests/test_feed_contract.py::test_create_and_like_preserve_existing_semantics",
+      "demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload0]",
+      "demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload1]",
+      "demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload2]",
+      "demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload3]",
+      "demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload4]",
+      "demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload5]",
+      "demo_app/tests/test_feed_contract.py::test_missing_like_returns_404_without_writing",
+      "demo_app/tests/test_feed_contract.py::test_post_content_remains_data_not_sql",
+      "demo_app/tests/test_persistence_contract.py::test_restart_preserves_posts_and_likes_without_reseeding",
+      "demo_app/tests/test_persistence_contract.py::test_sqlite_backup_restores_exact_previous_data",
+      "demo_app/tests/test_persistence_contract.py::test_separate_state_directories_never_share_writes",
+      "demo_app/tests/test_ranking_contract.py::test_ranking_preserves_posts_and_does_not_mutate_input",
+      "demo_app/tests/test_ranking_contract.py::test_ranking_handles_empty_and_single_post_lists",
+      "demo_app/tests/test_ranking_contract.py::test_ranking_breaks_equal_timestamp_and_like_ties_by_id",
+      "demo_app/tests/test_ranking_contract.py::test_feed_order_is_produced_by_ranking_module",
+      "",
+      "18 tests collected in 0.03s",
+      "Immutable baseline collected 18 tests",
+      "..........................                                               [100%]",
+      "- generated xml file: [RUN_STATE]/generations/1c98d768-d602-4e6b-b68c-99203bc505ea/tests-43dff5054fe1490692ce6fa25faecab3.xml -",
+      "26 passed in 0.39s",
+      "tests: passed — 26 passed",
+      "boot: passed",
+      "GET /health 200",
+      "GET /api/posts 200",
+      "smoke: passed — GET /health 200, GET /api/posts 200"
+    ]
+  },
+  "timeline_listing": {
+    "timelines": [
+      {
+        "id": "b92b27e1-6e41-4d63-be13-3ff68f2e8f84",
+        "parent_id": null,
+        "name": "Original",
+        "status": "confirmed",
+        "created_at": "2026-10-24T08:52:43.369163+00:00",
+        "snapshot_id": "61c0ba1e-640f-4d29-9c00-c00e243bc845",
+        "modification": null,
+        "generation_id": null,
+        "is_active": true
+      },
+      {
+        "id": "e707847b-6d1b-4b86-a11a-582c59c72d6c",
+        "parent_id": "b92b27e1-6e41-4d63-be13-3ff68f2e8f84",
+        "name": "Live official SDK proof",
+        "status": "pending",
+        "created_at": "2026-10-24T08:53:15.181764+00:00",
+        "snapshot_id": "a310c64c-18d3-4726-916e-2783fffd091a",
+        "modification": "ai",
+        "generation_id": "1c98d768-d602-4e6b-b68c-99203bc505ea",
+        "is_active": false
+      }
+    ],
+    "active_timeline_id": "b92b27e1-6e41-4d63-be13-3ff68f2e8f84",
+    "app_url": "[LOCAL_APP_URL]"
+  },
+  "parent_feed": {
+    "posts": [
+      {
+        "id": 4,
+        "author": "verification",
+        "content": "parent only",
+        "likes": 0,
+        "created_at": "2026-10-24T08:53:15.266398+00:00"
+      },
+      {
+        "id": 3,
+        "author": "verification",
+        "content": "parent sentinel",
+        "likes": 0,
+        "created_at": "2026-10-24T08:52:43.850893+00:00"
+      },
+      {
+        "id": 2,
+        "author": "Grace",
+        "content": "The newest update from the original timeline.",
+        "likes": 1,
+        "created_at": "2026-01-02T12:00:00+00:00"
+      },
+      {
+        "id": 1,
+        "author": "Ada",
+        "content": "An older post the community loves.",
+        "likes": 8,
+        "created_at": "2026-01-01T12:00:00+00:00"
+      }
+    ],
+    "ordering": "chronological"
+  },
+  "child_feed": {
+    "posts": [
+      {
+        "id": 1,
+        "author": "Ada",
+        "content": "An older post the community loves.",
+        "likes": 8,
+        "created_at": "2026-01-01T12:00:00+00:00"
+      },
+      {
+        "id": 2,
+        "author": "Grace",
+        "content": "The newest update from the original timeline.",
+        "likes": 1,
+        "created_at": "2026-01-02T12:00:00+00:00"
+      },
+      {
+        "id": 3,
+        "author": "verification",
+        "content": "parent sentinel",
+        "likes": 0,
+        "created_at": "2026-10-24T08:52:43.850893+00:00"
+      }
+    ],
+    "ordering": "popular"
+  },
+  "revisited_child_feed": {
+    "posts": [
+      {
+        "id": 1,
+        "author": "Ada",
+        "content": "An older post the community loves.",
+        "likes": 8,
+        "created_at": "2026-01-01T12:00:00+00:00"
+      },
+      {
+        "id": 4,
+        "author": "verification",
+        "content": "child only",
+        "likes": 1,
+        "created_at": "2026-10-24T08:53:15.740125+00:00"
+      },
+      {
+        "id": 2,
+        "author": "Grace",
+        "content": "The newest update from the original timeline.",
+        "likes": 1,
+        "created_at": "2026-01-02T12:00:00+00:00"
+      },
+      {
+        "id": 3,
+        "author": "verification",
+        "content": "parent sentinel",
+        "likes": 0,
+        "created_at": "2026-10-24T08:52:43.850893+00:00"
+      }
+    ],
+    "ordering": "popular"
+  },
+  "source_hashes": {
+    "parent": "705db40a9de900fa28c27bb1d393857d18c1659221b4d549811f98ac0e7f8936",
+    "child": "e06087d5a6505f66883e36186f9dce97c9e590a17bb97009ad7dd51ce7dc161a"
+  },
+  "health": {
+    "status": "ok",
+    "active_timeline_id": "e707847b-6d1b-4b86-a11a-582c59c72d6c",
+    "runtime_running": true
+  }
+}

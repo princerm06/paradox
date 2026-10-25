@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "generation_id": "1c98d768-d602-4e6b-b68c-99203bc505ea",
+  "session_id": "9314e994-adfb-4f2e-8ee3-2a02a8026228",
+  "timeline_id": "e707847b-6d1b-4b86-a11a-582c59c72d6c",
+  "base_commit": "719ec66f619d8762f53b1a810958cbca612446bf",
+  "documentation_commit": "70c9aa6ce959ccb2745d680ba43097ec8b83650b",
+  "received_archive_file_count": 164,
+  "provenance_limit": "Recovered pre-sanitized export; no provider-signed attestation or pre-export originals supplied.",
+  "replayed_source_sha256": {
+    "demo_app/__init__.py": "310d77e1eeac4577aae261bd1186db64991a47e21fc597f4a3575a448f937f50",
+    "demo_app/behavior.json": "47001cc80b8490cdc90f2814c85c99398fe14149ea349f0f6076bf382dcb4656",
+    "demo_app/index.html": "57fa12abd8d482b7af49cde8dc15b63185ad7d58e42a10494ea5c6a5e57f077b",
+    "demo_app/main.py": "5013fcbe8021014c180a6aa9d19af85b346d35a734b0227fa89688beb83772ea",
+    "demo_app/ranking.py": "e06087d5a6505f66883e36186f9dce97c9e590a17bb97009ad7dd51ce7dc161a",
+    "demo_app/tests/__init__.py": "3c5f2833e899ea51c81e06f218d0c7543586a575ff4b0717397a5a111c6bb1c0",
+    "demo_app/tests/conftest.py": "7c1275bd1a2b8417970d7a061595c8107f35ec3a23d98e32bd8774a75dbb1dac",
+    "demo_app/tests/test_feed_contract.py": "420074048ccdb716b3de7d2b66029c9590bfe6bf0f4e1e37531afa23f018a1eb",
+    "demo_app/tests/test_persistence_contract.py": "3292c60353d65cd98c4b7700e0fe8777ce321f70e0bd08341d08bae0f526ee87",
+    "demo_app/tests/test_popular_ranking.py": "e67c604ff77bc7c5d0c66a11321f8a7f967bae434a7d41bebccbe440f433faf7",
+    "demo_app/tests/test_ranking_contract.py": "e527f8e394aa16dfdf7b9ece7bd94829c2c21f7a1431ca144b9ecd89cec00cb3"
+  },
+  "files": [
+    {
+      "path": ".gitattributes",
+      "bytes": 51,
+      "sha256": "7ae7348c5a02c6d76d5af26ebdb6e78228b9387c58b2d1ae5e81b68a9ff678f0",
+      "source": "publication-authored",
+      "transformations": {}
+    },
+    {
+      "path": "FINDINGS.md",
+      "bytes": 4105,
+      "sha256": "798aa3a42ed1b87c69f04271001fa59c78d8de9c226ed2946e1b3239cd3902f9",
+      "source": "publication-authored",
+      "transformations": {}
+    },
+    {
+      "path": "README.md",
+      "bytes": 7006,
+      "sha256": "3446259ba9c441cfeb2e0488c6ba73d69727a5f337d94f245774d489171a61d2",
+      "source": "publication-authored",
+      "transformations": {}
+    },
+    {
+      "path": "REDACTIONS.md",
+      "bytes": 4434,
+      "sha256": "57fbb9da59dc9716c5863ea152420ea8abdc9ff1f28b3be2329a3a54c24afdb8",
+      "source": "publication-authored",
+      "transformations": {}
+    },
+    {
+      "path": "artifacts/agent.log",
+      "bytes": 4022,
+      "sha256": "d839b305b5db04ab7f617a883c0b51b9e932541e0c820d5740f22d18642959db",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/agent.log",
+      "transformations": {}
+    },
+    {
+      "path": "artifacts/generated.patch",
+      "bytes": 3087,
+      "sha256": "73e173232363e5883088a9d8e8d75b5fa87b8c57bb8b15f964089e1dcc412c9a",
+      "source": "http-diff.patch",
+      "transformations": {}
+    },
+    {
+      "path": "artifacts/http-evidence.json",
+      "bytes": 15366,
+      "sha256": "0e28a53f6ba1a9f8aecca2886128976740ba3dbad08fd945fc57c0cef96cb4ca",
+      "source": "http-evidence.json",
+      "transformations": {
+        "workspace_path": 0,
+        "run_state_path": 1,
+        "local_app_url": 1,
+        "hostname": 0
+      }
+    },
+    {
+      "path": "artifacts/sdk-session.jsonl",
+      "bytes": 24090,
+      "sha256": "596bb7fb724e35dfed54948d1d3997ed0b76200df6b2d020dadbada88c53e144",
+      "source": "sdk/sessions/9314e994-adfb-4f2e-8ee3-2a02a8026228.jsonl",
+      "transformations": {
+        "host_id": 1,
+        "workspace_path": 14,
+        "run_state_path": 0,
+        "local_app_url": 0,
+        "hostname": 0,
+        "omitted_environment_reminder_records": 3,
+        "omitted_internal_reasoning_blocks": 3
+      }
+    },
+    {
+      "path": "artifacts/tests.xml",
+      "bytes": 3513,
+      "sha256": "400aaa14c7af764f5330c27c5afdbb40aeae4d2a9eab0c68fa1dc3221bfd9a09",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/tests-43dff5054fe1490692ce6fa25faecab3.xml",
+      "transformations": {
+        "workspace_path": 0,
+        "run_state_path": 0,
+        "local_app_url": 0,
+        "hostname": 1
+      }
+    },
+    {
+      "path": "artifacts/validation.log",
+      "bytes": 2080,
+      "sha256": "4249786def47c8fc4e6b679e4d0c895f07236111232151c7f2a15b29b28ef875",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/validation.log",
+      "transformations": {
+        "workspace_path": 0,
+        "run_state_path": 1,
+        "local_app_url": 0,
+        "hostname": 0
+      }
+    },
+    {
+      "path": "baseline/demo_app/__init__.py",
+      "bytes": 68,
+      "sha256": "310d77e1eeac4577aae261bd1186db64991a47e21fc597f4a3575a448f937f50",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/__init__.py",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/behavior.json",
+      "bytes": 36,
+      "sha256": "47001cc80b8490cdc90f2814c85c99398fe14149ea349f0f6076bf382dcb4656",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/behavior.json",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/index.html",
+      "bytes": 3701,
+      "sha256": "57fa12abd8d482b7af49cde8dc15b63185ad7d58e42a10494ea5c6a5e57f077b",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/index.html",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/main.py",
+      "bytes": 4315,
+      "sha256": "5013fcbe8021014c180a6aa9d19af85b346d35a734b0227fa89688beb83772ea",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/main.py",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/ranking.py",
+      "bytes": 479,
+      "sha256": "705db40a9de900fa28c27bb1d393857d18c1659221b4d549811f98ac0e7f8936",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/ranking.py",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/tests/__init__.py",
+      "bytes": 72,
+      "sha256": "3c5f2833e899ea51c81e06f218d0c7543586a575ff4b0717397a5a111c6bb1c0",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/tests/__init__.py",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/tests/conftest.py",
+      "bytes": 232,
+      "sha256": "7c1275bd1a2b8417970d7a061595c8107f35ec3a23d98e32bd8774a75dbb1dac",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/tests/conftest.py",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/tests/test_feed_contract.py",
+      "bytes": 2732,
+      "sha256": "420074048ccdb716b3de7d2b66029c9590bfe6bf0f4e1e37531afa23f018a1eb",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/tests/test_feed_contract.py",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/tests/test_persistence_contract.py",
+      "bytes": 2153,
+      "sha256": "3292c60353d65cd98c4b7700e0fe8777ce321f70e0bd08341d08bae0f526ee87",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/tests/test_persistence_contract.py",
+      "transformations": {}
+    },
+    {
+      "path": "baseline/demo_app/tests/test_ranking_contract.py",
+      "bytes": 1242,
+      "sha256": "e527f8e394aa16dfdf7b9ece7bd94829c2c21f7a1431ca144b9ecd89cec00cb3",
+      "source": "generations/1c98d768-d602-4e6b-b68c-99203bc505ea/baseline-collection/demo_app/tests/test_ranking_contract.py",
+      "transformations": {}
+    },
+    {
+      "path": "verify.py",
+      "bytes": 8773,
+      "sha256": "18e297a2cbe7506477b13ee6e0a0fc0a25e169400b0e18abeae6472bd42cdc6e",
+      "source": "publication-authored",
+      "transformations": {}
+    }
+  ]
+}

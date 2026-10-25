@@ -1,0 +1,91 @@
+--- a/demo_app/ranking.py
++++ b/demo_app/ranking.py
+@@ -5,8 +5,8 @@
+ mutating the input list or its posts. Ranking is independent of SQLite state.
+ """
+ 
+-ORDERING = "chronological"
++ORDERING = "popular"
+ 
+ 
+ def rank(posts: list[dict]) -> list[dict]:
+-    return sorted(posts, key=lambda post: (post["created_at"], post["id"]), reverse=True)
++    return sorted(posts, key=lambda post: (post["likes"], post["created_at"], post["id"]), reverse=True)
+--- /dev/null
++++ b/demo_app/tests/test_popular_ranking.py
+@@ -0,0 +1,75 @@
++"""Tests that prove the feed is ranked by popularity (most liked first)."""
++
++from copy import deepcopy
++
++from demo_app import ranking
++
++
++def test_ordering_label_is_popular():
++    assert ranking.ORDERING == "popular"
++
++
++def test_more_liked_post_ranks_first():
++    posts = [
++        {"id": 1, "created_at": "2026-01-02T12:00:00+00:00", "likes": 1},
++        {"id": 2, "created_at": "2026-01-01T12:00:00+00:00", "likes": 8},
++    ]
++    result = ranking.rank(posts)
++    assert result[0]["id"] == 2
++    assert result[1]["id"] == 1
++
++
++def test_like_count_beats_recency():
++    """A newer post with fewer likes must rank below an older post with more likes."""
++    older_popular = {"id": 1, "created_at": "2026-01-01T00:00:00+00:00", "likes": 10}
++    newer_unpopular = {"id": 2, "created_at": "2026-01-03T00:00:00+00:00", "likes": 2}
++    result = ranking.rank([newer_unpopular, older_popular])
++    assert result[0]["id"] == 1
++    assert result[1]["id"] == 2
++
++
++def test_equal_likes_broken_by_recency_then_id():
++    posts = [
++        {"id": 1, "created_at": "2026-01-01T00:00:00+00:00", "likes": 5},
++        {"id": 3, "created_at": "2026-01-02T00:00:00+00:00", "likes": 5},
++        {"id": 2, "created_at": "2026-01-02T00:00:00+00:00", "likes": 5},
++    ]
++    result = ranking.rank(posts)
++    assert [p["id"] for p in result] == [3, 2, 1]
++
++
++def test_rank_does_not_mutate_input():
++    posts = [
++        {"id": 1, "created_at": "2026-01-01T00:00:00+00:00", "likes": 3},
++        {"id": 2, "created_at": "2026-01-02T00:00:00+00:00", "likes": 7},
++    ]
++    original = deepcopy(posts)
++    result = ranking.rank(posts)
++    assert posts == original
++    assert result is not posts
++
++
++def test_api_ordering_field_is_popular(client):
++    response = client.get("/api/posts")
++    assert response.status_code == 200
++    data = response.json()
++    assert data["ordering"] == "popular"
++
++
++def test_api_feed_is_sorted_by_likes_descending(client):
++    # Like post 1 (Ada's older post) several times so it has the most likes.
++    for _ in range(5):
++        client.post("/api/posts/1/like")
++
++    response = client.get("/api/posts")
++    assert response.status_code == 200
++    posts = response.json()["posts"]
++    likes = [p["likes"] for p in posts]
++    assert likes == sorted(likes, reverse=True)
++
++
++def test_health_reports_popular_ordering(client):
++    for path in ("/health", "/api/health"):
++        response = client.get(path)
++        assert response.status_code == 200
++        assert response.json()["ordering"] == "popular"

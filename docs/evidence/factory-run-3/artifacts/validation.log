@@ -1,0 +1,32 @@
+agent: passed
+guard: passed
+compile: passed
+demo_app/tests/test_feed_contract.py::test_feed_exposes_existing_post_contract
+demo_app/tests/test_feed_contract.py::test_health_aliases_and_page_remain_available
+demo_app/tests/test_feed_contract.py::test_create_and_like_preserve_existing_semantics
+demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload0]
+demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload1]
+demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload2]
+demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload3]
+demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload4]
+demo_app/tests/test_feed_contract.py::test_invalid_posts_do_not_modify_database[payload5]
+demo_app/tests/test_feed_contract.py::test_missing_like_returns_404_without_writing
+demo_app/tests/test_feed_contract.py::test_post_content_remains_data_not_sql
+demo_app/tests/test_persistence_contract.py::test_restart_preserves_posts_and_likes_without_reseeding
+demo_app/tests/test_persistence_contract.py::test_sqlite_backup_restores_exact_previous_data
+demo_app/tests/test_persistence_contract.py::test_separate_state_directories_never_share_writes
+demo_app/tests/test_ranking_contract.py::test_ranking_preserves_posts_and_does_not_mutate_input
+demo_app/tests/test_ranking_contract.py::test_ranking_handles_empty_and_single_post_lists
+demo_app/tests/test_ranking_contract.py::test_ranking_breaks_equal_timestamp_and_like_ties_by_id
+demo_app/tests/test_ranking_contract.py::test_feed_order_is_produced_by_ranking_module
+
+18 tests collected in 0.03s
+Immutable baseline collected 18 tests
+..........................                                               [100%]
+- generated xml file: [RUN_STATE]/generations/1c98d768-d602-4e6b-b68c-99203bc505ea/tests-43dff5054fe1490692ce6fa25faecab3.xml -
+26 passed in 0.39s
+tests: passed — 26 passed
+boot: passed
+GET /health 200
+GET /api/posts 200
+smoke: passed — GET /health 200, GET /api/posts 200
