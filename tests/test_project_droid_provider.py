@@ -33,6 +33,7 @@ def imported_agent(tmp_path, monkeypatch):
         return ["mock-sandbox", *command], dict(environment, PARADOX_DROID_SANDBOX="macos-project-write-v1")
 
     helper = types.SimpleNamespace(
+        availability_reason=lambda: None,
         protected_files=lambda workspace, supplied_profile: ("requirements.txt", "tests/test_original.py"),
         prepare=prepare,
         cleanup=lambda workspace: prepared.append(("cleanup", workspace)),
@@ -155,3 +156,13 @@ def test_imported_droid_inventory_failure_still_cleans_private_artifacts(importe
     with pytest.raises(RuntimeError, match="unsafe project inventory"):
         Providers().run("droid", "Implement a feature", code, control, log, profile)
     assert prepared == [("cleanup", code)] and not control.calls
+
+
+def test_imported_droid_availability_checks_its_own_sandbox(imported_agent, monkeypatch):
+    code, profile, prepared, log = imported_agent
+    monkeypatch.setattr("engine.providers.ADAPTER", code / "requirements.txt")
+    monkeypatch.setattr("engine.providers.shutil.which", lambda command: "/offline/" + command)
+    monkeypatch.setattr(engine.imported_agent_sandbox, "availability_reason", lambda: "imported confinement unavailable")
+    monkeypatch.setattr("engine.providers.droid_sandbox.availability_reason", lambda: pytest.fail("demo sandbox consulted"))
+    report = Providers().availability("droid", profile)
+    assert not report["available"] and report["reason"] == "imported confinement unavailable"

@@ -20,11 +20,14 @@ class Providers:
         self.recipes = Path(os.environ.get("PARADOX_SCRIPTED_RECIPES", "tests/fixtures/scripted_agent")).resolve()
 
     def availability(self, provider, profile=DEMO_PROFILE):
+        sandbox = droid_sandbox
         if profile != DEMO_PROFILE and provider == "droid":
             if profile.adapter != "fastapi-sqlite-v1" or profile.execution != "sandboxed":
                 return {"id": provider, "available": False, "reason": "Droid is unsupported for this imported project profile"}
             if os.environ.get("PARADOX_IMPORTED_DROID_ENABLED") != "1":
                 return {"id": provider, "available": False, "reason": "Imported Droid requires explicit operator opt-in PARADOX_IMPORTED_DROID_ENABLED=1; no automatic or scripted fallback"}
+            from engine import imported_agent_sandbox
+            sandbox = imported_agent_sandbox
         if provider == "scripted":
             reason = None if self.recipes.is_dir() and any(self.recipes.glob("*.json")) else "scripted recipe directory is missing or empty"
         elif provider == "droid":
@@ -37,7 +40,7 @@ class Providers:
                 reason = "droid CLI required by the official SDK is not installed on PATH"
             elif not os.environ.get("FACTORY_API_KEY"):
                 reason = "FACTORY_API_KEY is not configured"
-            elif (sandbox_reason := droid_sandbox.availability_reason()):
+            elif (sandbox_reason := sandbox.availability_reason()):
                 reason = sandbox_reason
             else:
                 try:
