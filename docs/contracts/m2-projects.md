@@ -125,6 +125,8 @@ Every imported-code process runs under `sandbox-exec`: the Original boot, pytest
 
   Reason: a preview or test response on localhost could disclose a readable secret even with outbound traffic blocked. The engine state directory outside the run root is denied as well.
 - **Environment:** the existing `scrubbed_environment()` with `PARADOX_APP_DIR` set. No `FACTORY_API_KEY`, `PARADOX_TOKEN` or shell token.
+  - **Gate (added 2026-10-24):** the live demo runtime on main inherits the full engine environment (reproduced with sentinels). No imported-project execution merges until the runtime env-scrub fix merges.
+  - Every sandboxed-run test asserts that sentinel `FACTORY_API_KEY`, `PARADOX_TOKEN`, `PARADOX_SHELL_TOKEN` and `ANTHROPIC_API_KEY` are absent from the child environment.
 - **Required tests:** a fixture app whose import-time code tries to write outside state, to open an outbound socket, and to exec `/bin/sh`. All three are blocked, and the run fails or continues according to the test.
 
 Verified by Claude on 2026-10-24 (macOS, CLT Python 3.9, engine venv). pytest passed and uvicorn served `/health` under the profile; a SQLite write to state succeeded; `$HOME` write and `/bin/sh` exec were blocked. Two traps the profile must avoid:
