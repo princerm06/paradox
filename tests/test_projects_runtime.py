@@ -1,7 +1,12 @@
 from pathlib import Path
 import os
+import json
 import runpy
 import shutil
+import signal
+import subprocess
+import sys
+import time
 
 import httpx
 import pytest
@@ -9,6 +14,7 @@ import pytest
 from engine.adapters.fastapi_sqlite import ADAPTER
 from engine.adapters import exec_sandbox
 from engine.service import Engine
+from engine.jobs import scrubbed_environment
 
 
 @pytest.fixture
@@ -108,3 +114,102 @@ def probe():
     finally:
         engine.close()
     assert not list((engine.root / "workspace").glob(".runtime-*"))
+
+
+def test_engine_crash_stops_sandbox_tree_and_reopens_state(imported, tmp_path):
+    repository, code, profile = imported
+    main = code / "notes_app/main.py"
+    main.write_text(main.read_text() + '''
+import subprocess, sys
+state.mkdir(parents=True, exist_ok=True)
+worker = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+(state / "worker.pid").write_text(str(worker.pid))
+''')
+    root = tmp_path / "engine"
+    script = '''
+import json, time
+from pathlib import Path
+from engine.adapters.fastapi_sqlite import ADAPTER
+from engine.service import Engine
+profile = ADAPTER.profile(%r)
+engine = Engine(Path(%r), Path(%r), 0, profile=profile)
+engine.start()
+print(json.dumps(dict(pid=engine.runtime.process.pid, url=engine.runtime.url)), flush=True)
+time.sleep(60)
+''' % (dict(adapter=profile.adapter, app=profile.app, tests=profile.tests,
+            health_path=profile.health_path, state_env=profile.state_env), str(root), str(code))
+    parent = subprocess.Popen([sys.executable, "-u", "-c", script], cwd=Path(__file__).resolve().parents[1],
+                              env=scrubbed_environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    runtime_pid = None
+    try:
+        import selectors
+        with selectors.DefaultSelector() as selector:
+            selector.register(parent.stdout, selectors.EVENT_READ)
+            assert selector.select(20), "Engine did not start"
+        started = json.loads(parent.stdout.readline())
+        runtime_pid = started["pid"]
+        url = started["url"]
+        assert httpx.post(url + "/api/notes", json={"content": "before crash"}, trust_env=False).status_code == 201
+        worker_pid = int((root / "workspace/state/worker.pid").read_text())
+        parent.kill()
+        parent.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            records = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(runtime_pid) + "," + str(worker_pid)],
+                                     env=scrubbed_environment(), capture_output=True, text=True).stdout.split()
+            if not records or all(record.startswith("Z") for record in records):
+                break
+            time.sleep(.05)
+        else:
+            pytest.fail("Sandbox descendants survived engine death")
+        engine = Engine(root, code, 0, profile=profile)
+        engine.start()
+        try:
+            assert "before crash" in httpx.get(engine.runtime.url + "/api/notes", trust_env=False).text
+            assert len(list((root / "workspace").glob(".runtime-*"))) == 1
+        finally:
+            engine.close()
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        parent.wait(timeout=5)
+        parent.stdout.close()
+        parent.stderr.close()
+        if runtime_pid:
+            try:
+                os.killpg(runtime_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.xfail(strict=True, reason="P1: detached sandbox descendants escape process-group cleanup; M2 NO-GO")
+def test_detached_sandbox_child_must_not_survive_runtime_close(imported, tmp_path):
+    repository, code, profile = imported
+    main = code / "notes_app/main.py"
+    main.write_text(main.read_text() + '''
+import subprocess, sys
+state.mkdir(parents=True, exist_ok=True)
+worker = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"], start_new_session=True)
+(state / "detached.pid").write_text(str(worker.pid))
+''')
+    engine = Engine(tmp_path / "engine", code, 0, profile=profile)
+    detached = None
+    log_thread = None
+    try:
+        engine.start()
+        detached = int((engine.root / "workspace/state/detached.pid").read_text())
+        log_thread = engine.runtime.log_thread
+        engine.close()
+        record = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(detached)],
+                                env=scrubbed_environment(), capture_output=True, text=True).stdout.strip()
+        assert not record or record.startswith("Z"), "Detached sandbox process survived close"
+    finally:
+        if engine.storage is not None:
+            engine.close(checkpoint=False)
+        if detached:
+            try:
+                os.killpg(detached, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if log_thread:
+            log_thread.join(timeout=5)

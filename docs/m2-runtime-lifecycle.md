@@ -10,7 +10,7 @@ The engine drains child stdout through a pipe into its bounded runtime log.
 Passing the engine-owned log descriptor directly is insufficient: the sandbox
 correctly denies writes to that file outside the workspace. The stdin watchdog
 uses an unbuffered descriptor read to avoid buffered-reader shutdown deadlocks.
-Stopping a runtime terminates its process group, including surviving descendants,
+Stopping a runtime terminates its process group, including same-group descendants,
 then closes descriptors and removes temporary data. Sandboxed snapshots contain
 only code and application state, never runtime temporary files.
 
@@ -24,3 +24,6 @@ tests). Probes use dummy credentials and disposable repositories only. They cove
 HTTP serving, SQLite writes/restart, source/Git identity, credential absence,
 code write denial, sibling/home read denial, outbound/DNS/shell/Mach denial,
 engine environment and signal denial. This is a runtime gate, not complete M2 GO.
+
+Later adversarial testing found a detached-child cleanup P1. Whole-tree cleanup is
+not established: see `docs/m2-projects-api.md`. M2 remains NO-GO pending resolution.

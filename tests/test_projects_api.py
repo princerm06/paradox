@@ -1,5 +1,9 @@
 from pathlib import Path
+import json
+import os
 import runpy
+import sqlite3
+import subprocess
 import time
 
 from fastapi.testclient import TestClient
@@ -23,11 +27,12 @@ def repository(tmp_path, monkeypatch):
     return builder["build_notes_repo"](tmp_path)
 
 
-def onboard(client, repository):
+def onboard(client, repository, configuration=None):
     response = client.post("/api/repositories", headers=SHELL, json={"path": str(repository)})
     assert response.status_code == 201, response.text
     rid = response.json()["id"]
-    response = client.post(f"/api/repositories/{rid}/validate", headers=TOKEN, json={})
+    response = client.post(f"/api/repositories/{rid}/validate", headers=TOKEN,
+                           json={"configuration": configuration} if configuration else {})
     assert response.status_code == 200 and response.json()["valid"], response.text
     response = client.post(f"/api/repositories/{rid}/trust", headers=SHELL, json={})
     assert response.status_code == 200, response.text
@@ -111,11 +116,167 @@ def test_scripted_generation_state_activation_restore_and_revoke(repository, tmp
         assert client.delete(f"/api/repositories/{rid}/trust", headers=SHELL).status_code == 204
         projects = client.app.state.projects
         record = projects.records[project["id"]]
-        import sqlite3, json
         with sqlite3.connect(projects.root / record["id"] / "engine.sqlite3") as connection:
             raw = connection.execute("SELECT data FROM generations WHERE id=?", (slow["id"],)).fetchone()[0]
         cancelled = json.loads(raw)
         assert cancelled["status"] == "failed"
         assert cancelled["error"] == {"stage": "engine", "message": "trust revoked"}
         assert len(list((projects.root / record["id"] / "snapshots").glob("*.tmp"))) == 0
+    assert identity(repository) == before
+
+
+def commit(repository):
+    for arguments in (("add", "."), ("-c", "user.name=Disposable", "-c", "user.email=fixture@example.invalid", "commit", "-m", "probe")):
+        subprocess.run(["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "-C", str(repository), *arguments],
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(repository)}, check=True, capture_output=True)
+
+
+def test_hostile_import_through_real_api_remains_sandboxed(repository, tmp_path, monkeypatch):
+    secret = tmp_path / "engine/nonsecret-private"
+    secret.parent.mkdir()
+    secret.write_text("nonsecret-private")
+    main = repository / "notes_app/main.py"
+    main.write_text(main.read_text() + '''
+import ctypes, socket, subprocess
+@app.get("/security-probe")
+def security_probe():
+    results = {name: name not in os.environ for name in ("FACTORY_API_KEY", "PARADOX_TOKEN", "PARADOX_SHELL_TOKEN", "ANTHROPIC_API_KEY")}
+    for name, operation in {
+        "engine_state": lambda: Path(%r).read_text(),
+        "source_git": lambda: Path(%r).read_text(),
+        "code_write": lambda: Path(__file__).write_text("no"),
+        "home": lambda: Path(%r).read_text(),
+        "network": lambda: socket.create_connection(("1.1.1.1",80), timeout=1),
+        "dns": lambda: socket.getaddrinfo("example.com",80),
+        "shell": lambda: subprocess.run(["/bin/sh","-c","true"]),
+        "engine_signal": lambda: os.kill(%d,0),
+    }.items():
+        try:
+            operation()
+        except OSError:
+            results[name] = True
+        else:
+            results[name] = False
+    library = ctypes.CDLL(None,use_errno=True)
+    bootstrap = ctypes.c_uint.in_dll(library,"bootstrap_port")
+    service = ctypes.c_uint()
+    for name in ("com.apple.pasteboard.1", "com.apple.SecurityServer", "com.apple.coreservices.launchservicesd", "com.apple.cfprefsd.daemon"):
+        results[name] = library.bootstrap_look_up(bootstrap,name.encode(),ctypes.byref(service)) == 1100
+    mib = (ctypes.c_int * 3)(1,49,%d)
+    size = ctypes.c_size_t(262144)
+    buffer = ctypes.create_string_buffer(size.value)
+    results["engine_environment"] = library.sysctl(mib,3,buffer,ctypes.byref(size),None,0) == -1
+    return results
+''' % (str(secret), str(repository / ".git/HEAD"), str(Path.home() / ".zshrc"), os.getpid(), os.getpid()))
+    commit(repository)
+    (repository / "original.sqlite3").write_bytes(b"nonsecret original database")
+    before = identity(repository)
+    monkeypatch.setenv("FACTORY_API_KEY", "nonsecret-factory-sentinel")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "nonsecret-anthropic-sentinel")
+    with TestClient(create_app(state_dir=tmp_path / "engine", runtime_port=0)) as client:
+        rid, project = onboard(client, repository)
+        response = client.post("/api/projects/" + project["id"] + "/open", headers=TOKEN, json={})
+        assert response.status_code == 200, response.text
+        checks = httpx.get(response.json()["runtime"]["url"] + "security-probe", trust_env=False).json()
+        assert checks and all(checks.values()), checks
+        assert client.get("/api/health").json()["status"] == "ok"
+    assert identity(repository) == before
+
+
+def test_auth_origin_config_bound_revocation_and_delete(repository, tmp_path):
+    main = repository / "notes_app/main.py"
+    main.write_text(main.read_text() + '\n@app.get("/healthz")\ndef other_health():\n    return {"status": "ok"}\n')
+    commit(repository)
+    before = identity(repository)
+    with TestClient(create_app(state_dir=tmp_path / "engine", runtime_port=0)) as client:
+        rid, project = onboard(client, repository, {"adapter": "fastapi-sqlite-v1", "app": "notes_app.main:app", "state_env": "PARADOX_APP_DIR"})
+        prefix = "/api/projects/" + project["id"]
+        assert client.get(prefix).status_code == 401
+        assert client.post(prefix + "/open", headers={**TOKEN, "Origin": "https://foreign.invalid"}, json={}).status_code == 403
+        assert client.post(prefix + "/open", headers=TOKEN, json={}).status_code == 200
+        configuration = {**project["configuration"], "health_path": "/healthz"}
+        response = client.post(f"/api/repositories/{rid}/validate", headers=TOKEN, json={"configuration": configuration})
+        assert response.status_code == 200 and response.json()["valid"], response.text
+        assert client.get(prefix, headers=TOKEN).json()["status"] == "unavailable"
+        assert client.post(prefix + "/open", headers=TOKEN, json={}).status_code == 403
+        response = client.post(f"/api/repositories/{rid}/validate", headers=TOKEN, json={"configuration": project["configuration"]})
+        assert response.json()["valid"]
+        assert client.post(prefix + "/open", headers=TOKEN, json={}).status_code == 403
+        assert client.delete(prefix, headers=TOKEN).status_code == 403
+        assert client.delete(prefix, headers=SHELL).status_code == 204
+        assert client.get(prefix, headers=TOKEN).status_code == 404
+        assert client.get("/api/health").json()["status"] == "ok"
+    assert identity(repository) == before
+
+
+def test_corrupt_project_metadata_and_unavailable_sandbox_do_not_break_demo(repository, tmp_path, monkeypatch):
+    state = tmp_path / "engine"
+    with TestClient(create_app(state_dir=state, runtime_port=0)) as client:
+        rid, project = onboard(client, repository)
+    (state / "projects" / project["id"] / "project.json").write_text("not json")
+    with TestClient(create_app(state_dir=state, runtime_port=0)) as client:
+        assert client.get("/api/projects", headers=TOKEN).json() == {"projects": []}
+        assert client.get("/api/health").json()["status"] == "ok"
+        monkeypatch.setattr("engine.projects.service.exec_sandbox.availability_reason", lambda: "forced unavailable")
+        response = client.post("/api/projects", headers=TOKEN, json={"repository_id": rid})
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "execution_sandbox_unavailable"
+        assert client.get("/api/health").json()["status"] == "ok"
+
+
+def test_configured_trust_is_explicit_and_does_not_execute_on_registration(repository, tmp_path, monkeypatch):
+    monkeypatch.setenv("PARADOX_TRUSTED_REPOSITORY_ROOTS", str(repository))
+    monkeypatch.delenv("PARADOX_SHELL_TOKEN")
+    state = tmp_path / "engine"
+    with TestClient(create_app(state_dir=state, runtime_port=0, repository_roots=[repository])) as client:
+        rid = client.get("/api/repositories", headers=TOKEN).json()["repositories"][0]["id"]
+        assert client.get("/api/projects", headers=TOKEN).json() == {"projects": []}
+        assert client.post(f"/api/repositories/{rid}/trust", headers=TOKEN, json={}).status_code == 403
+        assert client.post(f"/api/repositories/{rid}/validate", headers=TOKEN, json={}).json()["valid"]
+        result = client.post("/api/projects", headers=TOKEN, json={"repository_id": rid})
+        assert result.status_code == 201, result.text
+        assert result.json()["runtime"]["status"] == "stopped"
+
+
+def test_only_one_project_open_and_no_cross_project_state(repository, tmp_path):
+    second_parent = tmp_path / "second"
+    second_parent.mkdir()
+    builder = runpy.run_path(str(Path(__file__).parent / "fixtures/projects/build.py"))
+    second = builder["build_notes_repo"](second_parent)
+    before = identity(repository), identity(second)
+    with TestClient(create_app(state_dir=tmp_path / "engine", runtime_port=0)) as client:
+        unused, first = onboard(client, repository)
+        first_path = "/api/projects/" + first["id"]
+        first_open = client.post(first_path + "/open", headers=TOKEN, json={}).json()
+        preview = first_open["runtime"]["url"]
+        assert httpx.post(preview + "api/notes", json={"content": "first project only"}, trust_env=False).status_code == 201
+        unused, other = onboard(client, second)
+        second_path = "/api/projects/" + other["id"]
+        other_open = client.post(second_path + "/open", headers=TOKEN, json={}).json()
+        assert client.get(first_path, headers=TOKEN).json()["runtime"]["status"] == "stopped"
+        assert "first project only" not in httpx.get(other_open["runtime"]["url"] + "api/notes", trust_env=False).text
+        assert client.post(second_path + "/timelines/" + first["active_timeline_id"] + "/activate", headers=TOKEN).status_code == 404
+        reopened = client.post(first_path + "/open", headers=TOKEN, json={}).json()
+        assert "first project only" in httpx.get(reopened["runtime"]["url"] + "api/notes", trust_env=False).text
+        assert client.get(second_path, headers=TOKEN).json()["runtime"]["status"] == "stopped"
+    assert (identity(repository), identity(second)) == before
+
+
+def test_failed_original_boot_leaves_no_project_or_runtime(repository, tmp_path):
+    main = repository / "notes_app/main.py"
+    main.write_text(main.read_text() + "\nraise RuntimeError('disposable boot failure')\n")
+    commit(repository)
+    before = identity(repository)
+    state = tmp_path / "engine"
+    with TestClient(create_app(state_dir=state, runtime_port=0)) as client:
+        registration = client.post("/api/repositories", headers=SHELL, json={"path": str(repository)}).json()
+        rid = registration["id"]
+        assert client.post(f"/api/repositories/{rid}/validate", headers=TOKEN, json={}).json()["valid"]
+        assert client.post(f"/api/repositories/{rid}/trust", headers=SHELL, json={}).status_code == 200
+        response = client.post("/api/projects", headers=TOKEN, json={"repository_id": rid})
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "import_rejected"
+        assert client.get("/api/projects", headers=TOKEN).json() == {"projects": []}
+        assert not list((state / "projects").iterdir())
+        assert client.get("/api/health").json()["status"] == "ok"
     assert identity(repository) == before
