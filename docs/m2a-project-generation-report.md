@@ -158,8 +158,26 @@ denies DNS/Mach brokers. Unavailable sandboxing fails closed before runtime spaw
 ## Exact remaining dependency and verdict
 
 **M2-A scripted generation and project HTTP workflow: focused GO at `8e66728`.
-Overall M2 integration remains pending the final combined full regression and
-integration/security review; this is not merge approval.**
+Overall M2: NO-GO because of the detached-runtime-child lifecycle gap reported
+below, in addition to the outstanding combined regression/review gate. Passing
+the focused workflow tests is not a security or merge approval.**
+
+Codex 2 reported a separate disposable adversarial reproduction on `8e66728`:
+an imported app launched the approved Python interpreter with
+`start_new_session=True`. That child survived `Engine.close()` because it left
+the runtime's process group. It remained sandboxed, but retained the ability to
+write the old future's permitted state after timeline switching or trust
+revocation. The probe explicitly killed its detached process group afterward.
+This finding is reported by B; it was not independently rerun by A.
+
+The nine HTTP acceptance cases do not cover detached descendants and cannot
+establish whole-process-tree cleanup or state-writer revocation. No fork/child
+policy or supervision change has been made by A. The frozen contract permits
+sandboxed children, so changing that policy or introducing reliable descendant
+supervision requires an agreed fix before M2 can be considered GO. The final
+regression gate must include a real detached-child test for close, timeline
+switching and trust revocation, without weakening existing child-confinement
+checks or relying only on parent/process-group termination.
 
 Mirrored project routes require explicit project open; GET does not implicitly
 start imported code. The lanes agreed to reuse frozen `409 project_busy` for a
