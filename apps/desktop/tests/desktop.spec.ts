@@ -1,6 +1,8 @@
 // End-to-end checks for the desktop POC: the bundled studio as served by the .app,
 // against the scripted engine the .app launched. Scripted only; never a paid call.
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DATA, ENGINE, UI, alive, crash, engineEnv, enginePid, installDummyKey, launch, preserveState, quit, removeDummyKey, resetState, restoreState, token } from "./app.ts";
 
 test.describe.configure({ mode: "serial" });
@@ -214,6 +216,16 @@ test("2. full workflow in the bundled studio", async ({ page, context }) => {
 });
 
 test("3. persistence across a clean quit and relaunch; new token, old one rejected", async ({ page, context }) => {
+  const previewEvents: unknown[] = [];
+  page.on("requestfailed", (request) => {
+    if (request.url().startsWith(`${ENGINE}/app/`)) previewEvents.push({ failed: request.url(), error: request.failure()?.errorText });
+  });
+  page.on("response", (response) => {
+    if (response.url().startsWith(`${ENGINE}/app/`)) previewEvents.push({ response: response.url(), status: response.status() });
+  });
+  page.on("console", (message) => {
+    if (message.type() === "error") previewEvents.push({ console: message.text() });
+  });
   const exited = await quit();
   expect(exited.every((p) => !alive(p))).toBe(true);
   await launch();
@@ -228,7 +240,22 @@ test("3. persistence across a clean quit and relaunch; new token, old one reject
   await expect(page.getByText("Live · Original")).toBeVisible();
   await expect(page.locator(".future-node .future-select", { hasText: "Add a popular ranking" })).toHaveCount(1);
   // After relaunch the runtime and provider list come back: the portal renders the app and the agent chip is ready.
-  await expect(page.frameLocator("iframe[title='Live application']").getByText(/Ordering: chronological/)).toBeVisible({ timeout: 30_000 });
+  try {
+    await expect(page.frameLocator("iframe[title='Live application']").getByText(/Ordering: chronological/)).toBeVisible({ timeout: 30_000 });
+  } catch (error) {
+    const frames = await Promise.all(page.frames().map(async (frame) => ({
+      url: frame.url(), body: await frame.locator("body").innerText({ timeout: 1_000 }).catch(String),
+    })));
+    const http = await fetch(`${ENGINE}/app/`, { signal: AbortSignal.timeout(5_000) })
+      .then(async (response) => ({ status: response.status, body: await response.text() })).catch(String);
+    let runtimeLog: string;
+    try { runtimeLog = readFileSync(join(DATA, "state/runtime.log"), "utf8"); } catch (readError) { runtimeLog = String(readError); }
+    console.error("relaunch preview diagnostics", JSON.stringify({
+      previewEvents, frames, http, runtimeLog,
+      iframeSrc: await page.locator("iframe[title='Live application']").getAttribute("src").catch(String),
+    }));
+    throw error;
+  }
   await expect(page.locator(".chip-select .dot.ok")).toHaveCount(1, { timeout: 15_000 });
   await shot(page, "d08-after-relaunch");
 });

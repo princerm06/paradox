@@ -6,6 +6,8 @@ This branch builds **Paradox Droid Demo.app**, a portable Apple Silicon Tauri sh
 
 **Known P1 — do not automatically merge or use real credentials:** the native shell reads a Keychain item and puts `FACTORY_API_KEY` in the Python engine's exec environment. A same-user process (including an unsandboxed generated demo) can read that environment via macOS process inspection. Keychain storage does not close this exposure. Credential isolation must be fixed/reviewed, or the user must explicitly accept this exact risk; no acceptance is implied here. No genuine desktop Factory generation is claimed by the offline suite.
 
+On October 25, 2026, the user explicitly accepted this disclosed credential-exposure risk for the demo laptop only. This is a demo-only exception, not a security fix, general-release approval, imported M2 GO, or authorization for paid/provider calls. The offline gates and integration review still apply; the P1 remains open outside that accepted demo scope.
+
 ## Bundle and target setup
 
 - Bundles relocatable CPython 3.9.25 with pinned Python dependencies, the engine, built-in demo, scripted fixtures, built Droid adapter, SDK 0.10.0, Node 24.22.1 and Droid CLI 0.249.0. Node/CLI inputs are SHA-256 pinned; no compiler or developer checkout is needed at runtime.
