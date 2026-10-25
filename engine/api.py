@@ -86,6 +86,7 @@ class GenerationList(BaseModel):
 
 
 HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length", "content-encoding"}
+ENGINE_CREDENTIAL_HEADERS = {"authorization", "x-paradox-shell-token"}
 
 
 def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runtime_source: Optional[Path] = None, app_url: Optional[str] = None):
@@ -246,7 +247,7 @@ def create_app(state_dir: Optional[Path] = None, runtime_port: int = 8001, runti
         with engine.gate:
             if not engine.runtime.running:
                 raise Unavailable("Application runtime is not running")
-            filtered = {key: value for key, value in headers.items() if key.lower() not in HOP_HEADERS}
+            filtered = {key: value for key, value in headers.items() if key.lower() not in HOP_HEADERS | ENGINE_CREDENTIAL_HEADERS}
             try:
                 with httpx.Client(trust_env=False, timeout=10, follow_redirects=False) as client:
                     upstream = client.request(method, engine.runtime.url + "/" + path, params=query, headers=filtered, content=body)

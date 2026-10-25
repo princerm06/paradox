@@ -12,6 +12,14 @@ settings. They are copied, not mutated. `FACTORY_API_KEY`, `PARADOX_TOKEN`,
 Other explicitly supplied values are trusted caller configuration; do not pass
 `os.environ` as an explicit mapping.
 
+The `/app/` preview proxy also strips `Authorization` and
+`X-Paradox-Shell-Token` request headers case-insensitively. Previously, forwarding
+these headers let application code receive engine credentials whenever a client
+attached them to a preview request, independently of subprocess environments.
+Application cookies and other ordinary headers remain intact. Provider keys are
+not accepted over the engine HTTP API; this is not a guessed provider-header
+denylist.
+
 ## Subprocess audit
 
 Audited against base `5bdecc5`, with the M1 Git runner inspected separately on
@@ -50,6 +58,15 @@ sprout, return to parent, revisit child, and direct Runtime default/explicit
 environments. Explicit legitimate app settings survive; the caller's mapping is
 unchanged. Runtime processes are stopped in `finally` blocks. No production probe
 route is added.
+
+Additional tests exercise a scripted generation through compilation, immutable
+baseline collection, pytest, validation boot/smoke, adoption and the actual
+`/app/` preview. Child-side assertions reject all four sentinel names. A local
+Python mock replaces the Droid executable and proves that only that explicit
+agent path receives the dummy Factory key, never bearer/shell/Anthropic keys;
+neither the real SDK nor a paid call is involved. Preview header tests use a
+disposable fixture route reporting presence booleans only, including mixed-case
+names, and prove that cookies and application headers survive.
 
 This fixes environment inheritance, not arbitrary hostile-code isolation. `HOME`
 is still inherited by the bundled demo, and this change does not block filesystem
