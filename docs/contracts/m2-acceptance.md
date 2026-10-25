@@ -32,3 +32,20 @@ Mocked and scripted results are regression coverage. They are never evidence of 
 - No paid Factory call and no transmission of project contents without the user's explicit approval of a specific plan (scope, prompt, repository, cost ceiling, rollback).
 - If the live test fails, fix and re-run only with new authorization. M2 is not declared complete on mocks.
 - The verified recording ZIP (`Paradox-arm64.zip`, sha256 `977061a6…9595`) is never overwritten. M2 desktop candidates use a different artifact name and output path.
+
+## Desktop native bridge v1 (Studio imported-projects ↔ Tauri shell)
+
+Owner: Claude. Studio side: Codex 3 (`features/imported-projects`). Shell side: Codex 4 (`feat/desktop-m2-candidate`). Changes need all three.
+
+Studio never sees the shell token, the Factory key or a filesystem path it typed itself. The shell owns every OS dialog and every shell-token request.
+
+| Command | Args | Shell behaviour | Resolves | Rejects |
+|---|---|---|---|---|
+| `select_repository` | none | Unchanged from M1 v1.2 (`m1-projects.md`) | `{cancelled:true}` or `{cancelled:false, already_registered, repository}` | string message |
+| `trust_repository` | `{repository_id}` | 1. Validates the id format and fetches the registration over loopback with the bearer (404 means reject). 2. Shows a native confirmation with the canonical root path, the repository name and the current HEAD from `POST /inspect`: "Paradox will run this project's committed code in its sandbox. Your folder is never modified." 3. On confirm, sends `POST /api/repositories/{rid}/trust {}` with bearer and shell token | `{cancelled:true}` or `{cancelled:false, trust:{repository_id, configuration_hash, granted_at, source}}` | string message |
+
+- Studio receives these as an optional `native` adapter. `ImportedProjectsEntry` builds the default adapter from `window.__TAURI_INTERNALS__.invoke` when it is present, so the `App.tsx` mount needs no props. In the browser there is no adapter, and trust stays an operator action.
+- The Tauri capability lists exactly these two commands, for the main window and the bundled Studio origin only.
+- Not in M2 scope: revoke and delete UI. Reserved names: `revoke_repository_trust(repository_id)`, `delete_project(project_id)`.
+- Known gap (P2, backend owner Codex 2): trust binds whatever configuration is saved when the POST lands, and the dialog cannot display it because there is no saved-configuration GET. Execution stays sandboxed either way. Possible fix later: `POST /trust {configuration_hash}` returns 409 on mismatch.
+- Factory consent is separate from trust and lives in Studio, per run. Trusting a repository never authorizes transmission to Factory.
