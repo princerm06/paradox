@@ -149,6 +149,9 @@ def security_probe():
         "network": lambda: socket.create_connection(("1.1.1.1",80), timeout=1),
         "dns": lambda: socket.getaddrinfo("example.com",80),
         "shell": lambda: subprocess.run(["/bin/sh","-c","true"]),
+        "fork": lambda: os.fork(),
+        "spawn": lambda: os.posix_spawn(__import__('sys').executable,[__import__('sys').executable,'-I','-c','pass'],os.environ),
+        "detached": lambda: subprocess.Popen([__import__('sys').executable,'-I','-c','pass'], start_new_session=True),
         "engine_signal": lambda: os.kill(%d,0),
     }.items():
         try:
@@ -224,8 +227,10 @@ def test_corrupt_project_metadata_and_unavailable_sandbox_do_not_break_demo(repo
         assert client.get("/api/health").json()["status"] == "ok"
 
 
-def test_configured_trust_is_explicit_and_does_not_execute_on_registration(repository, tmp_path, monkeypatch):
-    monkeypatch.setenv("PARADOX_TRUSTED_REPOSITORY_ROOTS", str(repository))
+def test_configured_trust_is_explicit_and_does_not_execute_on_registration(repository, tmp_path, monkeypatch, caplog):
+    invalid = tmp_path / "trust-loop"
+    invalid.symlink_to(invalid)
+    monkeypatch.setenv("PARADOX_TRUSTED_REPOSITORY_ROOTS", str(repository) + os.pathsep + str(invalid))
     monkeypatch.delenv("PARADOX_SHELL_TOKEN")
     state = tmp_path / "engine"
     with TestClient(create_app(state_dir=state, runtime_port=0, repository_roots=[repository])) as client:
@@ -236,6 +241,9 @@ def test_configured_trust_is_explicit_and_does_not_execute_on_registration(repos
         result = client.post("/api/projects", headers=TOKEN, json={"repository_id": rid})
         assert result.status_code == 201, result.text
         assert result.json()["runtime"]["status"] == "stopped"
+        assert client.get("/api/health").json()["status"] == "ok"
+    assert "Configured trust root skipped: invalid_path" in caplog.text
+    assert str(invalid) not in caplog.text
 
 
 def test_only_one_project_open_and_no_cross_project_state(repository, tmp_path):
@@ -262,9 +270,13 @@ def test_only_one_project_open_and_no_cross_project_state(repository, tmp_path):
     assert (identity(repository), identity(second)) == before
 
 
-def test_failed_original_boot_leaves_no_project_or_runtime(repository, tmp_path):
+@pytest.mark.parametrize("failure", [
+    "raise RuntimeError('disposable boot failure')",
+    "__import__('subprocess').Popen([__import__('sys').executable,'-I','-c','pass'],start_new_session=True)",
+])
+def test_failed_original_boot_leaves_no_project_or_runtime(repository, tmp_path, failure):
     main = repository / "notes_app/main.py"
-    main.write_text(main.read_text() + "\nraise RuntimeError('disposable boot failure')\n")
+    main.write_text(main.read_text() + "\n" + failure + "\n")
     commit(repository)
     before = identity(repository)
     state = tmp_path / "engine"
@@ -276,7 +288,68 @@ def test_failed_original_boot_leaves_no_project_or_runtime(repository, tmp_path)
         response = client.post("/api/projects", headers=TOKEN, json={"repository_id": rid})
         assert response.status_code == 422
         assert response.json()["detail"]["code"] == "import_rejected"
+        assert "worker and subprocess applications are unsupported" in response.json()["detail"]["message"]
         assert client.get("/api/projects", headers=TOKEN).json() == {"projects": []}
         assert not list((state / "projects").iterdir())
+        assert client.get("/api/health").json()["status"] == "ok"
+    assert identity(repository) == before
+
+
+@pytest.mark.parametrize("transition", ["close", "switch", "revoke"])
+def test_single_process_reexec_writer_stops_on_transition(repository, tmp_path, transition):
+    writer = (
+        "import os,pathlib,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "path=pathlib.Path(os.environ['PARADOX_APP_DIR'])/'writer-proof'; "
+        "exec(\"while True:\\n path.write_text(str(time.monotonic_ns()))\\n time.sleep(.05)\")"
+    )
+    main = repository / "notes_app/main.py"
+    main.write_text(main.read_text() + '''
+import sys, subprocess
+@app.post("/replace")
+async def replace():
+    try:
+        subprocess.Popen([sys.executable, "-I", "-c", "pass"], start_new_session=True)
+    except PermissionError:
+        pass
+    else:
+        raise RuntimeError("subprocess restriction missing")
+    os.execv(sys.executable, [sys.executable, "-I", "-c", %r])
+''' % writer)
+    commit(repository)
+    before = identity(repository)
+    state = tmp_path / "engine"
+    with TestClient(create_app(state_dir=state, runtime_port=0)) as client:
+        rid, project = onboard(client, repository)
+        prefix = "/api/projects/" + project["id"]
+        opened = client.post(prefix + "/open", headers=TOKEN, json={}).json()
+        runtime = client.app.state.projects.live[project["id"]][0].runtime
+        application = runtime.sandbox_pid
+        with pytest.raises(httpx.HTTPError):
+            httpx.post(opened["runtime"]["url"] + "replace", trust_env=False, timeout=.3)
+        marker = state / "projects" / project["id"] / "workspace/state/writer-proof"
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert marker.exists()
+        if transition == "revoke":
+            response = client.delete(f"/api/repositories/{rid}/trust", headers=SHELL)
+            assert response.status_code == 204, response.text
+            assert client.get(prefix, headers=TOKEN).json()["status"] == "unavailable"
+        elif transition == "switch":
+            parent = tmp_path / "other"
+            parent.mkdir()
+            builder = runpy.run_path(str(Path(__file__).parent / "fixtures/projects/build.py"))
+            unused, other = onboard(client, builder["build_notes_repo"](parent))
+            response = client.post("/api/projects/" + other["id"] + "/open", headers=TOKEN, json={})
+            assert response.status_code == 200, response.text
+        else:
+            response = client.post(prefix + "/close", headers=TOKEN, json={})
+            assert response.status_code == 200, response.text
+        record = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(application)],
+                                env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True).stdout.strip()
+        assert not record or record.startswith("Z")
+        previous = marker.read_bytes()
+        time.sleep(.2)
+        assert marker.read_bytes() == previous
         assert client.get("/api/health").json()["status"] == "ok"
     assert identity(repository) == before

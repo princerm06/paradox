@@ -194,8 +194,7 @@ def test_signals_restricted_to_same_sandbox(run):
         " try:\n  os.kill(pid,0)\n"
         " except PermissionError:\n  pass\n"
         " else:\n  raise AssertionError('could signal control plane')\n"
-        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(0.2)'])\n"
-        "try:\n os.kill(child.pid,0)\nfinally:\n child.wait(timeout=5)\n" % os.getpid())
+        "os.kill(os.getpid(),0)\n" % os.getpid())
     log = run / "tmp/signals.log"
     assert JobControl().run(
         exec_sandbox.wrap([sys.executable, "-c", source], [run / "tmp"], run),
@@ -209,7 +208,7 @@ def test_external_control_stops_sandboxed_process_group(run, mode):
     ready = run / "state/child.pid"
     child_source = ("import pathlib,os,time; pathlib.Path(%r).write_text(str(os.getpid())); time.sleep(30)"
                     % str(ready))
-    source = ASSERT_ENV + "import subprocess,sys; subprocess.run([sys.executable,'-c',%r],check=True)" % child_source
+    source = ASSERT_ENV + child_source
     command = exec_sandbox.wrap([sys.executable, "-c", source], [run / "state", run / "tmp"], run)
     errors = []
 
@@ -254,12 +253,12 @@ def test_unapproved_binaries_cannot_execute(run):
     shutil.copy2(Path(sys.executable).resolve(), copied)
     pip = Path(sys.executable).parent / "pip"
     result = execute(run, "import subprocess; exec(%r)" % (
-        "for target in %r:\n try:\n  subprocess.run([target,'--version'],capture_output=True,check=True)\n"
+        "for target in %r:\n try:\n  os.execv(target,[target,'--version'])\n"
         " except PermissionError:\n  pass\n else:\n  raise AssertionError('unapproved exec')" % [str(copied), str(pip), "/bin/sh"]))
     assert result.returncode == 0, result.stderr
 
 
-def test_interpreter_symlink_child_inherits_all_restrictions(run):
+def test_interpreter_symlink_reexec_retains_all_restrictions(run):
     alias = run / "tmp/interpreter-alias"
     alias.symlink_to(Path(sys.executable).resolve())
     outside = run.parent / "outside"
@@ -275,9 +274,53 @@ def test_interpreter_symlink_child_inherits_all_restrictions(run):
         "buffer=ctypes.create_string_buffer(size.value)\n"
         "assert library.sysctl(mib,3,buffer,ctypes.byref(size),None,0)==-1\n"
         "assert ctypes.get_errno() in (1,13)\n" % (str(outside), os.getpid(), os.getpid()))
-    result = execute(run, "import subprocess; subprocess.run([%r,'-c',%r],check=True)" % (str(alias), child_source))
+    result = execute(run, "os.execv(%r,[%r,'-c',%r])" % (str(alias), str(alias), child_source))
     assert result.returncode == 0, result.stderr
     assert not outside.exists()
+
+
+@pytest.mark.parametrize("operation", [
+    "os.fork()",
+    "os.posix_spawn(sys.executable,[sys.executable,'-I','-c','pass'],os.environ)",
+    "subprocess.Popen([sys.executable,'-I','-c','pass'])",
+    "subprocess.Popen([sys.executable,'-I','-c','pass'],start_new_session=True)",
+    "multiprocessing.get_context('fork').Process(target=lambda: None).start()",
+    "multiprocessing.get_context('spawn').Process(target=print).start()",
+])
+def test_process_creation_denied(run, operation):
+    result = execute(run, "import sys,subprocess,multiprocessing; exec(%r)" % (
+        "try:\n " + operation + "\nexcept OSError as error:\n assert error.errno in (1,13)\n"
+        "else:\n raise AssertionError('child creation allowed')"))
+    assert result.returncode == 0, result.stderr
+
+
+def test_libc_fork_denied(run):
+    result = execute(run, "import ctypes; library=ctypes.CDLL(None,use_errno=True); "
+                     "assert library.fork()==-1; assert ctypes.get_errno() in (1,13)")
+    assert result.returncode == 0, result.stderr
+
+
+def test_shell_indirection_cannot_create_marker(run):
+    marker = run / "state/indirect-child"
+    result = execute(run, "assert os.system(%r)!=0" % ("echo bad > " + str(marker)))
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+
+
+def test_availability_rejects_missing_process_restriction(run, monkeypatch):
+    original = exec_sandbox._command
+
+    def weakened(*arguments):
+        command = original(*arguments)
+        command[2] = command[2].replace("(deny process-fork)", "")
+        return command
+
+    exec_sandbox.availability_reason.cache_clear()
+    monkeypatch.setattr(exec_sandbox, "_command", weakened)
+    try:
+        assert exec_sandbox.availability_reason() == "Execution sandbox enforcement probe failed"
+    finally:
+        exec_sandbox.availability_reason.cache_clear()
 
 
 def test_engine_venv_configuration_is_readonly(run):

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+import threading
 
 import httpx
 import pytest
@@ -14,7 +15,7 @@ import pytest
 from engine.adapters.fastapi_sqlite import ADAPTER
 from engine.adapters import exec_sandbox
 from engine.service import Engine
-from engine.jobs import scrubbed_environment
+from engine.jobs import Cancelled, JobControl, scrubbed_environment
 
 
 @pytest.fixture
@@ -80,6 +81,9 @@ def probe():
         "home_read": lambda: Path(%r).read_text(),
         "outbound": lambda: socket.create_connection(("1.1.1.1", 80), timeout=1),
         "shell": lambda: subprocess.run(["/bin/sh", "-c", "true"], check=True),
+        "fork": lambda: os.fork(),
+        "spawn": lambda: os.posix_spawn(__import__('sys').executable, [__import__('sys').executable, '-c', 'pass'], os.environ),
+        "detached": lambda: subprocess.Popen([__import__('sys').executable, '-I', '-c', 'pass'], start_new_session=True),
         "engine_signal": lambda: os.kill(%d, 0),
         "dns": lambda: socket.getaddrinfo("example.com", 80),
     }
@@ -116,14 +120,15 @@ def probe():
     assert not list((engine.root / "workspace").glob(".runtime-*"))
 
 
-def test_engine_crash_stops_sandbox_tree_and_reopens_state(imported, tmp_path):
+@pytest.mark.parametrize("reexec", [False, True])
+def test_engine_crash_stops_sandbox_tree_and_reopens_state(imported, tmp_path, reexec):
     repository, code, profile = imported
     main = code / "notes_app/main.py"
     main.write_text(main.read_text() + '''
-import subprocess, sys
-state.mkdir(parents=True, exist_ok=True)
-worker = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
-(state / "worker.pid").write_text(str(worker.pid))
+import sys
+@app.post("/replace")
+async def replace():
+    os.execv(sys.executable, [sys.executable, "-I", "-c", "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)"])
 ''')
     root = tmp_path / "engine"
     script = '''
@@ -134,13 +139,14 @@ from engine.service import Engine
 profile = ADAPTER.profile(%r)
 engine = Engine(Path(%r), Path(%r), 0, profile=profile)
 engine.start()
-print(json.dumps(dict(pid=engine.runtime.process.pid, url=engine.runtime.url)), flush=True)
+print(json.dumps(dict(pid=engine.runtime.process.pid, app_pid=engine.runtime.sandbox_pid, url=engine.runtime.url)), flush=True)
 time.sleep(60)
 ''' % (dict(adapter=profile.adapter, app=profile.app, tests=profile.tests,
             health_path=profile.health_path, state_env=profile.state_env), str(root), str(code))
     parent = subprocess.Popen([sys.executable, "-u", "-c", script], cwd=Path(__file__).resolve().parents[1],
                               env=scrubbed_environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     runtime_pid = None
+    application_pid = None
     try:
         import selectors
         with selectors.DefaultSelector() as selector:
@@ -148,14 +154,17 @@ time.sleep(60)
             assert selector.select(20), "Engine did not start"
         started = json.loads(parent.stdout.readline())
         runtime_pid = started["pid"]
+        application_pid = started["app_pid"]
         url = started["url"]
         assert httpx.post(url + "/api/notes", json={"content": "before crash"}, trust_env=False).status_code == 201
-        worker_pid = int((root / "workspace/state/worker.pid").read_text())
+        if reexec:
+            with pytest.raises(httpx.HTTPError):
+                httpx.post(url + "/replace", trust_env=False, timeout=.5)
         parent.kill()
         parent.wait(timeout=5)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            records = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(runtime_pid) + "," + str(worker_pid)],
+            records = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(runtime_pid) + "," + str(application_pid)],
                                      env=scrubbed_environment(), capture_output=True, text=True).stdout.split()
             if not records or all(record.startswith("Z") for record in records):
                 break
@@ -180,10 +189,14 @@ time.sleep(60)
                 os.killpg(runtime_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        if application_pid:
+            try:
+                os.killpg(application_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
-@pytest.mark.xfail(strict=True, reason="P1: detached sandbox descendants escape process-group cleanup; M2 NO-GO")
-def test_detached_sandbox_child_must_not_survive_runtime_close(imported, tmp_path):
+def test_worker_application_rejected_and_cleaned(imported, tmp_path):
     repository, code, profile = imported
     main = code / "notes_app/main.py"
     main.write_text(main.read_text() + '''
@@ -193,23 +206,85 @@ worker = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(
 (state / "detached.pid").write_text(str(worker.pid))
 ''')
     engine = Engine(tmp_path / "engine", code, 0, profile=profile)
-    detached = None
-    log_thread = None
     try:
-        engine.start()
-        detached = int((engine.root / "workspace/state/detached.pid").read_text())
-        log_thread = engine.runtime.log_thread
-        engine.close()
-        record = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(detached)],
-                                env=scrubbed_environment(), capture_output=True, text=True).stdout.strip()
-        assert not record or record.startswith("Z"), "Detached sandbox process survived close"
+        with pytest.raises(RuntimeError, match="Application exited"):
+            engine.start()
+        assert not (engine.root / "workspace/state/detached.pid").exists()
+        assert engine.runtime.process is None
+        assert not list((engine.root / "workspace").glob(".runtime-*"))
     finally:
         if engine.storage is not None:
             engine.close(checkpoint=False)
-        if detached:
-            try:
-                os.killpg(detached, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        if log_thread:
-            log_thread.join(timeout=5)
+
+
+def test_reexec_cannot_remove_trusted_supervisor(imported, tmp_path):
+    repository, code, profile = imported
+    main = code / "notes_app/main.py"
+    main.write_text(main.read_text() + '''
+import sys
+@app.post("/replace")
+async def replace():
+    os.execv(sys.executable, [sys.executable, "-I", "-c", "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)"])
+''')
+    engine = Engine(tmp_path / "engine", code, 0, profile=profile)
+    engine.start()
+    pid = engine.runtime.sandbox_pid
+    try:
+        with pytest.raises(httpx.HTTPError):
+            httpx.post(engine.runtime.url + "/replace", trust_env=False, timeout=.5)
+        engine.close()
+        record = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)],
+                                env=scrubbed_environment(), capture_output=True, text=True).stdout.strip()
+        assert not record or record.startswith("Z")
+    finally:
+        if engine.storage is not None:
+            engine.close(checkpoint=False)
+
+
+@pytest.mark.parametrize("mode", ["cancel", "timeout"])
+def test_unhealthy_reexec_is_stopped(imported, tmp_path, mode):
+    repository, code, profile = imported
+    source = (
+        "import os,pathlib,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "(pathlib.Path(os.environ['PARADOX_APP_DIR'])/'ready').write_text(str(os.getpid())); time.sleep(60)"
+    )
+    main = code / "notes_app/main.py"
+    main.write_text(main.read_text() + "\nimport sys\nos.execv(sys.executable,[sys.executable,'-I','-c',%r])\n" % source)
+    engine = Engine(tmp_path / "engine", code, 0, profile=profile)
+    control = JobControl()
+    engine.runtime.control = control
+    errors = []
+
+    def start():
+        try:
+            engine.start()
+        except (RuntimeError, Cancelled) as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=start)
+    thread.start()
+    try:
+        ready = engine.root / "workspace/state/ready"
+        deadline = time.monotonic() + 10
+        while not ready.exists() and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert ready.exists()
+        pid = int(ready.read_text())
+        if mode == "cancel":
+            control.cancel()
+        thread.join(timeout=22)
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], Cancelled if mode == "cancel" else RuntimeError)
+        if mode == "timeout":
+            assert "health check timed out" in str(errors[0])
+        assert engine.runtime.process is None
+        record = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)],
+                                env=scrubbed_environment(), capture_output=True, text=True).stdout.strip()
+        assert not record or record.startswith("Z")
+        assert not list((engine.root / "workspace").glob(".runtime-*"))
+    finally:
+        control.cancel()
+        thread.join(timeout=10)
+        if engine.storage is not None:
+            engine.close(checkpoint=False)

@@ -181,7 +181,7 @@ class Projects:
             except RepositoryError:
                 raise
             except (OSError, ValueError, RuntimeError) as error:
-                raise RepositoryError("import_rejected", "Project import or initial sandboxed health check failed") from error
+                raise RepositoryError("import_rejected", "Project import or sandboxed health check failed; worker and subprocess applications are unsupported") from error
             finally:
                 if engine:
                     engine.close(checkpoint=False)
@@ -218,7 +218,7 @@ class Projects:
                 record.update(status="unavailable", runtime={"status": "failed", "url": None, "timeline_id": None})
                 self.save(record)
                 if isinstance(error, (OSError, ValueError, RuntimeError)) and not isinstance(error, RepositoryError):
-                    raise RepositoryError("import_rejected", "Project runtime could not start safely") from error
+                    raise RepositoryError("import_rejected", "Project runtime could not start safely; worker and subprocess applications are unsupported") from error
                 raise
             return self.get(pid)
 

@@ -86,7 +86,7 @@ def _command(argv: Sequence[str], writable: Sequence[Path], run_root: Path) -> L
     home = Path.home().resolve()
     profile = "\n".join([
         "(version 1)", "(allow default)",
-        "(deny file-read*)", "(deny file-write*)", "(deny process-exec)",
+        "(deny file-read*)", "(deny file-write*)", "(deny process-exec)", "(deny process-fork)",
         "(deny network*)",
         "(deny mach-lookup)", "(deny user-preference-read)",
         "(deny process-info*)", "(allow process-info* (target self))",
@@ -122,7 +122,7 @@ def availability_reason() -> Optional[str]:
             secret = parent / "outside"
             secret.write_text("probe")
             probe = (
-                "import errno,os,pathlib,socket,subprocess; "
+                "import errno,os,pathlib,socket,subprocess,sys; "
                 "root=pathlib.Path(%r); secret=pathlib.Path(%r); "
                 "(root/'tmp'/'allowed').write_text('ok'); "
                 "exec(%r)"
@@ -146,6 +146,14 @@ def availability_reason() -> Optional[str]:
                 "; bootstrap=ctypes.c_uint.in_dll(library,'bootstrap_port'); "
                 "service=ctypes.c_uint(); "
                 "assert library.bootstrap_look_up(bootstrap,b'com.apple.pasteboard.1',ctypes.byref(service))==1100"
+            )
+            probe += "; exec(%r)" % (
+                "for spawn in [lambda: os.fork(), lambda: os.posix_spawn(sys.executable, [sys.executable, '-I', '-c', 'pass'], os.environ)]:\n"
+                " try:\n  pid=spawn()\n"
+                " except OSError as error:\n  assert error.errno in (1,13)\n"
+                " else:\n"
+                "  if pid == 0:\n   os._exit(0)\n"
+                "  os.waitpid(pid,0)\n  raise AssertionError('single-process restriction not enforced')\n"
             )
             result = subprocess.run(
                 _command([sys.executable, "-c", probe], [writable], root),

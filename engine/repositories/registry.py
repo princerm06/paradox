@@ -17,8 +17,12 @@ class Registry:
         self.configurations = {}
         self.trusts = {}
         self.on_revoke = lambda repository_id: None
-        self.trusted_roots = {str(Path(root).resolve()) for root in
-                              filter(None, os.environ.get("PARADOX_TRUSTED_REPOSITORY_ROOTS", "").split(os.pathsep))}
+        self.trusted_roots = set()
+        for root in filter(None, os.environ.get("PARADOX_TRUSTED_REPOSITORY_ROOTS", "").split(os.pathsep)):
+            try:
+                self.trusted_roots.add(str(Path(root).resolve()))
+            except (OSError, ValueError, RuntimeError):
+                logging.getLogger(__name__).warning("Configured trust root skipped: invalid_path")
         self.lock = threading.RLock()
         self.git = Git()
         self.state_dir = Path(state_dir).resolve()

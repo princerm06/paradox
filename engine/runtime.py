@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import selectors
 import subprocess
 import sys
 import shutil
@@ -27,6 +28,7 @@ class Runtime:
         self.profile = profile
         self.temporary = None
         self.log_thread = None
+        self.sandbox_pid = None
 
     @property
     def running(self):
@@ -47,6 +49,7 @@ class Runtime:
         if self.running:
             return
         listener = socket.socket()
+        status_read = status_write = None
         try:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", self.port))
@@ -79,8 +82,7 @@ class Runtime:
                 self.temporary = Path(tempfile.mkdtemp(prefix=".runtime-", dir=workspace)).resolve()
                 environment = exec_sandbox.environment(environment, self.temporary)
                 launcher = (
-                    "import os,sys,threading,signal; sys.pycache_prefix=sys.argv[3]; import uvicorn; "
-                    "threading.Thread(target=lambda: (os.read(0,1), os.killpg(os.getpgrp(),signal.SIGKILL)), daemon=True).start(); "
+                    "import os,sys; sys.pycache_prefix=sys.argv[3]; import uvicorn; "
                     "sys.path.append(os.getcwd()); "
                     "uvicorn.run(sys.argv[2],fd=int(sys.argv[1]),log_level='warning',access_log=False)"
                 )
@@ -89,24 +91,40 @@ class Runtime:
                      str(self.temporary / "pycache")],
                     [workspace / "state", self.temporary], workspace,
                 )
+                status_read, status_write = os.pipe()
+                command = [sys.executable, "-I", str(Path(__file__).with_name("runtime_supervisor.py")),
+                           str(listener.fileno()), str(status_write), str(workspace / "code"), *command]
             self.process = subprocess.Popen(
                 command,
-                cwd=self.root / "workspace" / "code",
+                cwd=self.root if sandboxed else self.root / "workspace" / "code",
                 env=environment,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE if sandboxed else self.log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
-                pass_fds=(listener.fileno(),),
+                pass_fds=(listener.fileno(), status_write) if sandboxed else (listener.fileno(),),
             )
             if sandboxed:
                 self.log_thread = threading.Thread(target=self.capture_log, args=(self.process.stdout, self.log), daemon=True)
                 self.log_thread.start()
+                os.close(status_write)
+                status_write = None
+                with selectors.DefaultSelector() as selector:
+                    selector.register(status_read, selectors.EVENT_READ)
+                    if not selector.select(5):
+                        raise RuntimeError("Application supervisor did not initialize")
+                    status = os.read(status_read, 128).decode("ascii").strip()
+                if not status.isdecimal():
+                    raise RuntimeError("Application supervisor could not start")
+                self.sandbox_pid = int(status)
         except BaseException:
             self.stop()
             raise
         finally:
             listener.close()
+            for descriptor in (status_read, status_write):
+                if descriptor is not None:
+                    os.close(descriptor)
         try:
             with httpx.Client(trust_env=False, timeout=0.5) as client:
                 deadline = time.monotonic() + 15
@@ -152,8 +170,21 @@ class Runtime:
                 try:
                     self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    os.killpg(self.process.pid, signal.SIGKILL)
+                    if self.sandbox_pid:
+                        try:
+                            os.killpg(self.sandbox_pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    try:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     self.process.wait(timeout=5)
+            if self.sandbox_pid:
+                try:
+                    os.killpg(self.sandbox_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -161,6 +192,7 @@ class Runtime:
             if self.process.stdin:
                 self.process.stdin.close()
             self.process = None
+            self.sandbox_pid = None
         if self.log_thread:
             self.log_thread.join(timeout=5)
             self.log_thread = None

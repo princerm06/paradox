@@ -11,7 +11,9 @@ non-demo refusal remains in place. The next delivery requires architect review.
 - `exec_sandbox.wrap(argv, writable, run_root)` fails closed without macOS
   `sandbox-exec` and an enforcement probe. The probe checks state writes,
   outside reads/writes, shell exec denial, outbound denial, loopback sockets,
-  and numeric `KERN_PROCARGS2` denial. Its result is cached per engine process.
+  numeric `KERN_PROCARGS2` denial and fork/posix_spawn denial. Its result is cached
+  per engine process. Imported execution is now single-process by explicit user
+  approval; `(deny process-fork)` enforces it, not an application convention.
 - Commands must use the engine interpreter. The trusted engine computes its
   symlink chain once (at most eight paths), verifies every alias resolves to the
   same interpreter, and grants only exact read/exec literals plus the Framework
@@ -20,7 +22,7 @@ non-demo refusal remains in place. The next delivery requires architect review.
   subpath grant is used, and pyvenv.cfg is read-only. Shells, pip and copied
   interpreter binaries cannot execute. The exec allowlist is by resolved file
   identity; aliases to the approved interpreter are equivalent and remain
-  sandboxed. Tests prove a run-tmp symlink child still cannot write outside state,
+  sandboxed. Tests prove run-tmp symlink exec-in-place still cannot write outside state,
   read the engine environment, signal the engine, or connect externally.
 - File contents are readable only under the private run root, engine interpreter,
   engine site-packages, and fixed OS runtime locations. Ancestor directory
@@ -57,11 +59,12 @@ non-demo refusal remains in place. The next delivery requires architect review.
   /proc environment paths. No other sysctl reads are allowed.
 - Signals are denied except targets in the same sandbox. Imported processes
   cannot signal the control-plane engine, launcher or user processes; their own
-  sandboxed workers can be signalled. The unsandboxed control-plane can still
+  process can signal itself, but cannot create workers. The unsandboxed control-plane can still
   terminate sandboxed process groups on cancellation and timeout. Tests use
   harmless signal 0 for permission probes, never destructive signals to shared
-  processes. The sandbox is inherited throughout the process tree, including
-  descendant interpreters; it is not just an inner uvicorn command wrapper.
+  processes. Interpreter replacement retains the sandbox. The trusted external
+  runtime supervisor owns termination; it is not an app-removable inner watchdog
+  or just an inner uvicorn command wrapper.
 - `environment(base, run_tmp)` starts from `scrubbed_environment()`. Only the
   application state variable is accepted from base; HOME, TMPDIR, Python cache,
   and Python import paths are overwritten. Fixed engine site-packages plus cwd

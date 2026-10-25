@@ -4,28 +4,23 @@ Implementation branch: `feat/project-runtime-lifecycle`. Frozen interface:
 `docs/contracts/m2-projects.md`. M1 registration/validation remains documented in
 `docs/m1-repositories-api.md`. No UI or imported-source edits are required.
 
-## Readiness: NO-GO
+## Readiness: final security gates pending
 
-**P1: detached sandbox descendants survive process-group cleanup.** A disposable
-imported app can use `subprocess.Popen([sys.executable, "-I", "-c", ...],
-start_new_session=True)`. The child remains confined by the inherited sandbox,
-but `Engine.close()` kills only the original process group. A detached child can
-therefore keep writing its old future's writable state after close, switching or
-revocation. This is not an escape to engine secrets; it is a lifecycle and state
-integrity failure. The reproduction explicitly kills its disposable detached
-process group in `finally`. No probe processes are intentionally left running.
+The user approved a single supervised imported process on October 24, 2026.
+This explicit compatibility/security addendum supersedes the frozen contract's
+earlier confined-child allowance, without changing API/adapter signatures.
+`process-fork` is kernel-denied; the availability probe verifies fork and
+posix_spawn denial and fails closed. No application workers, reloaders, shell
+helpers or subprocess-based tests are supported. Threaded FastAPI requests work.
+An external trusted supervisor monitors the whole sandboxed application, including
+approved-interpreter exec-in-place, and escalates TERM to KILL before returning
+from close/switch/revoke. Application code cannot signal that supervisor or obtain
+the engine-liveness pipe. See `docs/m2-runtime-lifecycle.md` for the implementation.
 
-`test_detached_sandbox_child_must_not_survive_runtime_close` is a strict expected
-failure, **not evidence of a passing cleanup boundary**. Existing same-group
-cleanup and crash tests pass. A successful ordinary HTTP workflow does not
-establish adversarial whole-tree cleanup. No release/merge or real repository
-execution is recommended until this is resolved.
-
-The frozen contract explicitly permits confined interpreter children. Denying all
-fork/spawn operations would narrow that contract and needs coordination/approval;
-it has not been silently implemented. A whole-sandbox supervisor must also handle
-new sessions, double forks, retained state descriptors and cancellation/revocation
-races before claiming general child-process support.
+The prior detached-child P1 was reproduced on 47fc00b and is historical evidence,
+not a passing security gate. Its strict expected failure has been removed in favor
+of enforced spawn rejection and adversarial re-exec cleanup tests. Final readiness
+requires the new focused and full offline tests; no merge is authorized by GO.
 
 ## Authentication and approval
 
@@ -151,8 +146,8 @@ Omitted/null/other providers fail before creating a generation. No implicit
 DELETE `/api/repositories/{rid}/trust` requires shell + bearer, returns 204, cancels
 in-progress jobs with `error:{"stage":"engine","message":"trust revoked"}`, and
 closes the runtime. Durable project data remains. Open/generate/activate/restore
-subsequently fail with 403. **The detached-child caveat above currently prevents
-claiming complete write revocation.**
+subsequently fail with 403. The single-process supervisor stops the application's
+state writer before returning from revocation; this does not add worker support.
 
 ## Errors
 
@@ -190,21 +185,34 @@ code-only `uncommitted_changes_ignored` warning record that choice.
 
 | Project/layout | Status |
 |---|---|
-| Narrow FastAPI + engine-installed static dependencies + env-isolated SQLite | Implemented, disposable scripted testing only; overall NO-GO pending P1 |
+| Single-process FastAPI + engine-installed static dependencies + env-isolated SQLite | Implemented, disposable scripted testing only; final security gates pending |
 | Bundled demo | Existing `trusted_local` behavior preserved |
 | Missing trust/config/dependencies/sandbox | Fail closed; no imported boot |
 | Alternate frameworks, package installation, shell commands, external state | Unsupported |
 | Worktrees/submodule checkouts, committed symlinks/submodules, oversized trees | Rejected |
-| Detached child processes | Unresolved P1; not supported/release-ready |
+| Workers, reloaders, subprocesses (including test subprocesses) | Kernel-blocked; unsupported, not merely discouraged |
 
 The runtime sandbox covers the whole interpreter, not only an inner server command.
 Code is read-only; state and private run temporary data are writable. Runtime/test
 environments are rebuilt without provider, bearer or shell credentials. Home,
 sibling engine data, non-loopback sockets, DNS, Mach services, engine signals and
-engine process-environment reads are denied in real HTTP probes. Same-group
-children are terminated on shutdown and parent-engine death; temporary runtime
+engine process-environment reads are denied in real HTTP probes. Spawn/fork are
+denied; the supervised process is terminated on shutdown and engine death even
+after interpreter replacement or ignored SIGTERM. Temporary runtime
 data is excluded from snapshots and cleaned on restart.
 
 The bundled `trusted_local` demo is not promoted to a hostile-code security
 boundary by this work. No real Factory calls, pushes, merges or UI modifications
 form part of these results.
+
+## Single-process verification
+
+The focused sandbox/runtime/API gate passes 68 tests in 104.76s. This includes
+fork/spawn/subprocess/multiprocessing/libc and shell-indirection denial, a
+deliberately weakened-profile availability failure, actual uvicorn/pytest/SQLite,
+source/Git/database byte and mtime identity, re-exec cleanup on close/switch/revoke,
+engine-crash recovery, boot cancellation and health timeout. There are no expected
+failures in this gate. A final two-test delta passes in 3.66s, including malformed
+configured trust-root handling: one symlink-loop entry is skipped with a code-only
+warning while the valid root and bundled demo remain usable. The full offline
+regression result will be added after it completes on this security commit.
