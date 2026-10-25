@@ -36,6 +36,13 @@ host='127.0.0.1', port=int(os.environ['PARADOX_DESKTOP_PORT']), log_level='warni
 
 struct Sidecar(Mutex<Option<Child>>);
 
+/// Per-launch secrets. The bearer token is also given to the page; the shell
+/// token never leaves this process and the engine.
+struct Tokens {
+    bearer: String,
+    shell: String,
+}
+
 fn random_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 24];
     File::open("/dev/urandom")?.read_exact(&mut bytes)?;
@@ -67,7 +74,7 @@ fn fail(message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn start_engine(repo: &Path, data: &Path, token: &str) -> std::io::Result<Child> {
+fn start_engine(repo: &Path, data: &Path, token: &str, shell_token: &str) -> std::io::Result<Child> {
     let python = std::env::var_os("PARADOX_DESKTOP_PYTHON").map(PathBuf::from).unwrap_or_else(|| repo.join(".venv/bin/python"));
     let state = data.join("state");
     fs::create_dir_all(&state)?;
@@ -87,6 +94,7 @@ fn start_engine(repo: &Path, data: &Path, token: &str) -> std::io::Result<Child>
         .env("PARADOX_AGENT", "scripted")
         .env("PARADOX_SCRIPTED_RECIPES", repo.join("tests/fixtures/scripted_agent"))
         .env("PARADOX_TOKEN", token)
+        .env("PARADOX_SHELL_TOKEN", shell_token)
         .env("PARADOX_CORS_ORIGINS", origins)
         .stdin(Stdio::piped())
         .stdout(log.try_clone()?)
@@ -151,6 +159,11 @@ fn selftest_script(port: u16) -> String {
     const out = {{ ipc: !!tauri }};
     if (tauri) {{
       out.select_repository = await probe("select_repository");
+      out.select_again = await probe("select_repository");
+      const bearer = localStorage.getItem("paradox.token:http://127.0.0.1:{ENGINE_PORT}");
+      const page = await fetch("http://127.0.0.1:{ENGINE_PORT}/api/repositories", {{ method: "POST", headers: {{ Authorization: "Bearer " + bearer, "Content-Type": "application/json" }}, body: JSON.stringify({{ path: "/tmp" }}) }}).then((r) => r.status, (e) => String(e));
+      out.page_register_without_shell_token = page;
+      out.page_list = await fetch("http://127.0.0.1:{ENGINE_PORT}/api/repositories", {{ headers: {{ Authorization: "Bearer " + bearer }} }}).then((r) => r.json(), (e) => String(e));
       out.dialog_open = await probe("plugin:dialog|open", {{ options: {{ directory: true }} }});
       out.fs_read = await probe("plugin:fs|read_text_file", {{ path: "/etc/hosts" }});
       out.shell_open = await probe("plugin:shell|open", {{ path: "https://example.com" }});
@@ -163,29 +176,61 @@ fn selftest_script(port: u16) -> String {
     )
 }
 
-/// Native folder picker. The page can trigger it but never supplies a path.
-/// Spike: returns only the folder name; M1 wiring will register the path with
-/// the engine (POST /api/repositories with the shell token) and return its summary.
+/// Native folder picker. The page can trigger it but never supplies a path:
+/// the shell registers the chosen folder with its own engine (shell token) and
+/// returns the engine's RepositorySummary.
 #[tauri::command]
-async fn select_repository(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+async fn select_repository(app: tauri::AppHandle, tokens: tauri::State<'_, Tokens>) -> Result<serde_json::Value, String> {
     #[cfg(debug_assertions)]
     if let Some(path) = std::env::var_os("PARADOX_DESKTOP_SELFTEST_PICK") {
-        return picked(PathBuf::from(path));
+        return register(PathBuf::from(path), &tokens);
     }
     use tauri_plugin_dialog::DialogExt;
     match app.dialog().file().set_title("Open a project folder").blocking_pick_folder() {
         None => Ok(serde_json::json!({ "cancelled": true })),
-        Some(choice) => picked(choice.into_path().map_err(|error| error.to_string())?),
+        Some(choice) => register(choice.into_path().map_err(|error| error.to_string())?, &tokens),
     }
 }
 
-fn picked(path: PathBuf) -> Result<serde_json::Value, String> {
+fn register(path: PathBuf, tokens: &Tokens) -> Result<serde_json::Value, String> {
     let canonical = fs::canonicalize(&path).map_err(|_| "the selected folder is not accessible".to_string())?;
-    if !canonical.is_dir() {
-        return Err("the selection is not a folder".into());
+    let root = canonical.to_str().ok_or("the folder path is not valid UTF-8")?;
+    let body = serde_json::json!({ "path": root }).to_string();
+    let (status, reply) = engine_request("POST", "/api/repositories", Some(&body), tokens)?;
+    match status {
+        201 => Ok(serde_json::json!({ "cancelled": false, "already_registered": false, "repository": reply })),
+        // Already registered: return the existing registration, found by its canonical root.
+        409 => {
+            let (_, listing) = engine_request("GET", "/api/repositories", None, tokens)?;
+            let existing = listing["repositories"].as_array().and_then(|all| all.iter().find(|r| r["root"] == root)).cloned();
+            existing
+                .map(|repository| serde_json::json!({ "cancelled": false, "already_registered": true, "repository": repository }))
+                .ok_or_else(|| "the folder is already registered".to_string())
+        }
+        _ => Err(reply["detail"]["message"].as_str().or(reply["detail"].as_str()).unwrap_or("the engine rejected the folder").to_string()),
     }
-    let name = canonical.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    Ok(serde_json::json!({ "cancelled": false, "name": name }))
+}
+
+/// Loopback HTTP/1.0 request to this shell's own engine (no HTTP client dependency).
+fn engine_request(method: &str, path: &str, body: Option<&str>, tokens: &Tokens) -> Result<(u16, serde_json::Value), String> {
+    let unreachable = |_| "the engine is not reachable".to_string();
+    let mut stream = TcpStream::connect_timeout(&([127, 0, 0, 1], ENGINE_PORT).into(), Duration::from_secs(2)).map_err(unreachable)?;
+    stream.set_read_timeout(Some(Duration::from_secs(30))).map_err(unreachable)?;
+    let body = body.unwrap_or("");
+    let request = format!(
+        "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:{ENGINE_PORT}\r\nAuthorization: Bearer {}\r\nX-Paradox-Shell-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        tokens.bearer,
+        tokens.shell,
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).map_err(unreachable)?;
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply).map_err(unreachable)?;
+    let reply = String::from_utf8_lossy(&reply);
+    let (head, payload) = reply.split_once("\r\n\r\n").ok_or("malformed engine reply")?;
+    let status = head.split(' ').nth(1).and_then(|code| code.parse().ok()).ok_or("malformed engine reply")?;
+    // HTTP/1.0 keeps the reply unchunked: the payload is the JSON body (empty for 204).
+    Ok((status, serde_json::from_str(payload).unwrap_or(serde_json::Value::Null)))
 }
 
 fn main() {
@@ -201,7 +246,8 @@ fn main() {
             let data = app.path().app_data_dir()?;
             fs::create_dir_all(&data)?;
             let token = random_token()?;
-            let mut child = start_engine(&repo, &data, &token).unwrap_or_else(|error| fail(&format!("the engine could not be launched: {error}")));
+            let shell_token = random_token()?;
+            let mut child = start_engine(&repo, &data, &token, &shell_token).unwrap_or_else(|error| fail(&format!("the engine could not be launched: {error}")));
             let deadline = Instant::now() + Duration::from_secs(30);
             while !healthy() {
                 if let Ok(Some(status)) = child.try_wait() {
@@ -214,6 +260,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
             }
             app.manage(Sidecar(Mutex::new(Some(child))));
+            app.manage(Tokens { bearer: token.clone(), shell: shell_token });
 
             let base = format!("http://127.0.0.1:{ENGINE_PORT}");
             // Bind the studio to this engine and its token; drop any stale engine override.
