@@ -1,0 +1,391 @@
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+import httpx
+import pytest
+
+from engine.adapters import exec_sandbox
+from engine.jobs import Cancelled, JobControl
+
+
+SECRETS = ("FACTORY_API_KEY", "PARADOX_TOKEN", "PARADOX_SHELL_TOKEN", "ANTHROPIC_API_KEY")
+ASSERT_ENV = "import os; assert not any(name in os.environ for name in %r); " % (SECRETS,)
+
+
+@pytest.fixture(autouse=True)
+def sentinels(monkeypatch):
+    for name in SECRETS:
+        monkeypatch.setenv(name, "nonsecret-sentinel-" + name)
+
+
+@pytest.fixture
+def run(tmp_path):
+    if sys.platform != "darwin":
+        pytest.skip("macOS sandbox-exec required")
+    assert exec_sandbox.availability_reason() is None
+    root = (tmp_path / "run").resolve()
+    for name in ("code", "state", "tmp"):
+        (root / name).mkdir(parents=True)
+    return root
+
+
+def execute(root, source, writable=None):
+    return subprocess.run(
+        exec_sandbox.wrap([sys.executable, "-c", ASSERT_ENV + source],
+                          writable if writable is not None else [root / "state", root / "tmp"], root),
+        cwd=root / "code", env=exec_sandbox.environment(
+            dict(os.environ, PARADOX_APP_DIR=str(root / "state")), root / "tmp"),
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
+    )
+
+
+def test_environment_ignores_credentials_and_injection(tmp_path):
+    result = exec_sandbox.environment(dict(os.environ, PYTHONPATH="/untrusted", PYTHONHOME="/evil",
+                                          DYLD_INSERT_LIBRARIES="/evil", PARADOX_APP_DIR="/state"), tmp_path)
+    assert not any(name in result for name in SECRETS)
+    assert "PYTHONHOME" not in result
+    assert "DYLD_INSERT_LIBRARIES" not in result
+    assert "/untrusted" not in result["PYTHONPATH"]
+    assert result["HOME"] == result["TMPDIR"] == str(tmp_path.resolve())
+    assert result["PARADOX_APP_DIR"] == "/state"
+    assert result["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+
+
+def test_unavailable_platform_fails_closed(monkeypatch, tmp_path):
+    exec_sandbox.availability_reason.cache_clear()
+    monkeypatch.setattr(exec_sandbox.sys, "platform", "unsupported")
+    try:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            exec_sandbox.wrap([sys.executable, "-c", "pass"], [], tmp_path)
+    finally:
+        exec_sandbox.availability_reason.cache_clear()
+
+
+def test_state_writes_and_loopback_work(run):
+    result = execute(run,
+        "import sqlite3,socket,pathlib; "
+        "connection=sqlite3.connect(os.path.join(os.environ['PARADOX_APP_DIR'],'nested.db')); "
+        "connection.execute('create table proof(value)'); connection.commit(); connection.close(); "
+        "listener=socket.socket(); listener.bind(('127.0.0.1',0)); listener.listen(); "
+        "client=socket.create_connection(listener.getsockname(),timeout=2); "
+        "peer,address=listener.accept(); client.sendall(b'ok'); assert peer.recv(2)==b'ok'; "
+        "peer.close();client.close();listener.close()")
+    assert result.returncode == 0, result.stderr
+    assert (run / "state/nested.db").exists()
+
+
+@pytest.mark.parametrize("operation", [
+    "open(%r,'w').write('bad')",
+    "open(%r).read()",
+    "__import__('subprocess').run(['/bin/sh','-c','true'])",
+    "__import__('socket').create_connection(('1.1.1.1',80),timeout=1)",
+])
+def test_hostile_operations_blocked(run, operation):
+    secret = run.parent / "engine-secret"
+    secret.write_text("nonsecret test fixture")
+    expression = operation % str(secret) if "%r" in operation else operation
+    result = execute(run, "exec(%r)" % (
+        "try:\n " + expression + "\nexcept PermissionError:\n pass\nelse:\n raise AssertionError('not denied')"))
+    assert result.returncode == 0, result.stderr
+    assert secret.read_text() == "nonsecret test fixture"
+
+
+def test_home_reads_denied(run):
+    with tempfile.TemporaryDirectory(prefix=".paradox-sandbox-test-", dir=Path.home()) as directory:
+        secret = Path(directory) / "private"
+        secret.write_text("nonsecret fixture")
+        result = execute(run, "exec(%r)" % (
+            "try:\n open(%r).read()\nexcept PermissionError:\n pass\nelse:\n raise AssertionError('home readable')" % str(secret)))
+        assert result.returncode == 0, result.stderr
+
+
+def test_process_environment_inspection_denied(run):
+    result = execute(run,
+        "import ctypes; library=ctypes.CDLL(None,use_errno=True); "
+        "mib=(ctypes.c_int*3)(1,49,%d); size=ctypes.c_size_t(262144); "
+        "buffer=ctypes.create_string_buffer(size.value); "
+        "result=library.sysctl(mib,3,buffer,ctypes.byref(size),None,0); "
+        "assert result == -1 and ctypes.get_errno() in (1,13)" % os.getpid())
+    assert result.returncode == 0, result.stderr
+
+
+def test_process_tree_cannot_inspect_launcher_or_engine_environment(run):
+    source = ASSERT_ENV + "import ctypes,pathlib,subprocess; " + "exec(%r)" % (
+        "library=ctypes.CDLL(None,use_errno=True)\n"
+        "for pid in [os.getppid(), %d]:\n"
+        " mib=(ctypes.c_int*3)(1,49,pid)\n"
+        " size=ctypes.c_size_t(262144)\n"
+        " buffer=ctypes.create_string_buffer(size.value)\n"
+        " assert library.sysctl(mib,3,buffer,ctypes.byref(size),None,0)==-1\n"
+        " assert ctypes.get_errno() in (1,13)\n"
+        " mib=(ctypes.c_int*4)(1,14,1,pid)\n"
+        " size=ctypes.c_size_t(262144)\n"
+        " assert library.sysctl(mib,4,buffer,ctypes.byref(size),None,0)==-1\n"
+        " assert ctypes.get_errno() in (1,13)\n"
+        " for name in ['kern.procargs2','kern.procargs']:\n"
+        "  for qualified in [name, name+'.'+str(pid)]:\n"
+        "   size=ctypes.c_size_t(262144)\n"
+        "   assert library.sysctlbyname(qualified.encode(),buffer,ctypes.byref(size),None,0)==-1\n"
+        " try:\n  subprocess.run(['/bin/ps','eww',str(pid)],capture_output=True,check=True)\n"
+        " except PermissionError:\n  pass\n"
+        " else:\n  raise AssertionError('ps executed')\n"
+        " try:\n  pathlib.Path('/proc/%%d/environ' %% pid).read_bytes()\n"
+        " except (PermissionError,FileNotFoundError):\n  pass\n"
+        " else:\n  raise AssertionError('proc environment readable')\n" % os.getpid()
+    )
+    command = exec_sandbox.wrap([sys.executable, "-c", source], [run / "state", run / "tmp"], run)
+    log = run / "tmp/tree.log"
+    assert JobControl().run(command, run / "code", log, 15,
+                            exec_sandbox.environment({}, run / "tmp")) == 0, log.read_text()
+
+
+def test_stdlib_platform_queries_fail_safely(run):
+    result = execute(run,
+        "import platform; count=os.cpu_count(); "
+        "assert count is None or isinstance(count,int) and count>0; "
+        "assert platform.system()=='Darwin'; assert platform.machine(); print(count)")
+    assert result.returncode == 0, result.stderr
+
+
+def test_isolated_bootstrap_retains_engine_venv(run):
+    source = (ASSERT_ENV + "import sys; sys.pycache_prefix=%r; import pytest,uvicorn; "
+              "assert sys.prefix==%r; print('isolated bootstrap ok')") % (str(run / "tmp/pycache"), sys.prefix)
+    result = subprocess.run(
+        exec_sandbox.wrap([sys.executable, "-I", "-c", source], [run / "tmp"], run),
+        cwd=run / "code", env=exec_sandbox.environment({}, run / "tmp"),
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "isolated bootstrap ok" in result.stdout
+
+
+def test_signals_restricted_to_same_sandbox(run):
+    source = ASSERT_ENV + "import subprocess,sys; exec(%r)" % (
+        "for pid in [os.getppid(), %d]:\n"
+        " try:\n  os.kill(pid,0)\n"
+        " except PermissionError:\n  pass\n"
+        " else:\n  raise AssertionError('could signal control plane')\n"
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(0.2)'])\n"
+        "try:\n os.kill(child.pid,0)\nfinally:\n child.wait(timeout=5)\n" % os.getpid())
+    log = run / "tmp/signals.log"
+    assert JobControl().run(
+        exec_sandbox.wrap([sys.executable, "-c", source], [run / "tmp"], run),
+        run / "code", log, 15, exec_sandbox.environment({}, run / "tmp"),
+    ) == 0, log.read_text()
+
+
+@pytest.mark.parametrize("mode", ["cancel", "timeout"])
+def test_external_control_stops_sandboxed_process_group(run, mode):
+    control = JobControl()
+    ready = run / "state/child.pid"
+    child_source = ("import pathlib,os,time; pathlib.Path(%r).write_text(str(os.getpid())); time.sleep(30)"
+                    % str(ready))
+    source = ASSERT_ENV + "import subprocess,sys; subprocess.run([sys.executable,'-c',%r],check=True)" % child_source
+    command = exec_sandbox.wrap([sys.executable, "-c", source], [run / "state", run / "tmp"], run)
+    errors = []
+
+    def worker():
+        try:
+            control.run(command, run / "code", run / "tmp/control.log", 1 if mode == "timeout" else 15,
+                        exec_sandbox.environment({}, run / "tmp"))
+        except (Cancelled, TimeoutError) as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), (run / "tmp/control.log").read_text()
+        if mode == "cancel":
+            control.cancel()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], Cancelled if mode == "cancel" else TimeoutError)
+        pid = int(ready.read_text())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            result = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)],
+                                    capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, timeout=3)
+            if not result.stdout.strip() or result.stdout.strip().startswith("Z"):
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("Sandboxed worker survived process-group cleanup")
+    finally:
+        control.cancel()
+        thread.join(timeout=5)
+
+
+def test_unapproved_binaries_cannot_execute(run):
+    import shutil
+    copied = run / "tmp/copied-python"
+    shutil.copy2(Path(sys.executable).resolve(), copied)
+    pip = Path(sys.executable).parent / "pip"
+    result = execute(run, "import subprocess; exec(%r)" % (
+        "for target in %r:\n try:\n  subprocess.run([target,'--version'],capture_output=True,check=True)\n"
+        " except PermissionError:\n  pass\n else:\n  raise AssertionError('unapproved exec')" % [str(copied), str(pip), "/bin/sh"]))
+    assert result.returncode == 0, result.stderr
+
+
+def test_interpreter_symlink_child_inherits_all_restrictions(run):
+    alias = run / "tmp/interpreter-alias"
+    alias.symlink_to(Path(sys.executable).resolve())
+    outside = run.parent / "outside"
+    child_source = ASSERT_ENV + "import ctypes,socket; exec(%r)" % (
+        "for operation in [lambda: open(%r,'w'), "
+        "lambda: socket.create_connection(('1.1.1.1',80),timeout=1), "
+        "lambda: os.kill(%d,0)]:\n"
+        " try:\n  operation()\n except PermissionError:\n  pass\n"
+        " else:\n  raise AssertionError('child escaped')\n"
+        "library=ctypes.CDLL(None,use_errno=True)\n"
+        "mib=(ctypes.c_int*3)(1,49,%d)\n"
+        "size=ctypes.c_size_t(262144)\n"
+        "buffer=ctypes.create_string_buffer(size.value)\n"
+        "assert library.sysctl(mib,3,buffer,ctypes.byref(size),None,0)==-1\n"
+        "assert ctypes.get_errno() in (1,13)\n" % (str(outside), os.getpid(), os.getpid()))
+    result = execute(run, "import subprocess; subprocess.run([%r,'-c',%r],check=True)" % (str(alias), child_source))
+    assert result.returncode == 0, result.stderr
+    assert not outside.exists()
+
+
+def test_engine_venv_configuration_is_readonly(run):
+    target = Path(sys.prefix) / "pyvenv.cfg"
+    before = target.read_bytes()
+    result = execute(run, "exec(%r)" % (
+        "try:\n descriptor=os.open(%r,os.O_WRONLY)\nexcept PermissionError:\n pass\nelse:\n os.close(descriptor)\n raise AssertionError('venv writable')" % str(target)))
+    assert result.returncode == 0, result.stderr
+    assert target.read_bytes() == before
+
+
+def test_code_and_sibling_states_readonly(run):
+    source = run / "code/application.py"
+    source.write_text("original")
+    (run / "state/escape").symlink_to(run.parent, target_is_directory=True)
+    result = execute(run, "exec(%r)" % (
+        "for path in %r:\n try:\n  open(path,'w').write('bad')\n except PermissionError:\n  pass\n else:\n  raise AssertionError('write escaped')" %
+        [str(source), str(run / "state/escape/sibling")]))
+    assert result.returncode == 0, result.stderr
+    assert source.read_text() == "original"
+    assert not (run.parent / "sibling").exists()
+
+
+def test_read_symlink_cannot_expose_sibling_state(run):
+    secret = run.parent / "other-future.sqlite3"
+    secret.write_text("nonsecret fixture")
+    (run / "state/escape").symlink_to(secret)
+    result = execute(run, "exec(%r)" % (
+        "try:\n open(%r).read()\nexcept PermissionError:\n pass\nelse:\n raise AssertionError('read escaped')" %
+        str(run / "state/escape")))
+    assert result.returncode == 0, result.stderr
+
+
+def test_quoted_unicode_path_cannot_inject_sandbox_rule(run):
+    target = run / 'state/δ") (allow file-write*) ;'
+    target.mkdir()
+    result = execute(run, "open(%r,'w').write('ok')" % str(target / "allowed"), [run / "tmp", target])
+    assert result.returncode == 0, result.stderr
+    assert (target / "allowed").read_text() == "ok"
+    blocked = execute(run, "open(%r,'w').write('no')" % str(run / "code/disallowed"), [run / "tmp", target])
+    assert blocked.returncode != 0
+    assert not (run / "code/disallowed").exists()
+
+
+def test_exact_report_file_does_not_open_parent_directory(run):
+    report = run / "tests-random.xml"
+    report.touch()
+    result = execute(run,
+        "open(%r,'w').write('report'); exec(%r)" % (str(report),
+        "try:\n open(%r,'w').write('bad')\nexcept PermissionError:\n pass\nelse:\n raise AssertionError('parent writable')" % str(run / "other.xml")),
+        [run / "tmp", report])
+    assert result.returncode == 0, result.stderr
+    assert report.read_text() == "report"
+
+
+@pytest.mark.parametrize("kind", ["outside", "root", "symlink", "hardlink", "executable"])
+def test_unsafe_grants_and_executables_rejected(run, kind):
+    target = run / "state"
+    command = [sys.executable, "-c", "pass"]
+    if kind == "outside":
+        target = run.parent
+    elif kind == "root":
+        target = run
+    elif kind == "symlink":
+        target = run / "link"
+        target.symlink_to(run / "state", target_is_directory=True)
+    elif kind == "hardlink":
+        original = run.parent / "original"
+        original.touch()
+        target = run / "linked"
+        os.link(original, target)
+    elif kind == "executable":
+        command = ["/bin/sh", "-c", "true"]
+    with pytest.raises(ValueError):
+        exec_sandbox.wrap(command, [target], run)
+
+
+def test_compile_and_legitimate_pytest_keep_code_readonly(run):
+    (run / "code/test_safe.py").write_text(
+        "import os\ndef test_safe():\n assert not any(name in os.environ for name in %r)\n" % (SECRETS,)
+    )
+    (run / "code/app.py").write_text("VALUE = 1\n")
+    environment = exec_sandbox.environment({}, run / "tmp")
+    for arguments in (["-m", "compileall", "-q", "."],
+                      ["-m", "pytest", "--noconftest", "-q", "-c", os.devnull,
+                       "-p", "no:cacheprovider", "--rootdir", str(run / "code"),
+                       "--confcutdir", str(run / "code"), "test_safe.py"]):
+        result = subprocess.run(
+            exec_sandbox.wrap([sys.executable, *arguments], [run / "tmp"], run),
+            cwd=run / "code", env=environment, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert not list((run / "code").rglob("*.pyc"))
+    assert list((run / "tmp/pycache").rglob("*.pyc"))
+
+
+def test_uvicorn_readiness_and_credential_free_preview(run):
+    (run / "code/probe.py").write_text(
+        "import os\nfrom fastapi import FastAPI\napp=FastAPI()\n"
+        "@app.get('/health')\ndef health():\n return {'secrets': [name for name in %r if name in os.environ]}\n" % (SECRETS,)
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        command = exec_sandbox.wrap(
+            [sys.executable, "-m", "uvicorn", "probe:app", "--fd", str(listener.fileno())],
+            [run / "tmp", run / "state"], run)
+        with (run / "tmp/server.log").open("w+") as log:
+            process = subprocess.Popen(command, cwd=run / "code", env=exec_sandbox.environment({}, run / "tmp"),
+                                       pass_fds=(listener.fileno(),), stdout=log, stderr=log)
+            try:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        log.seek(0)
+                        pytest.fail(log.read())
+                    try:
+                        response = httpx.get("http://127.0.0.1:%d/health" % port, timeout=0.3, trust_env=False)
+                        if response.status_code == 200:
+                            assert response.json() == {"secrets": []}
+                            break
+                    except httpx.HTTPError:
+                        pass
+                    time.sleep(0.05)
+                else:
+                    pytest.fail("Sandboxed uvicorn readiness timed out")
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
