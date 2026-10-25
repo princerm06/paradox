@@ -75,11 +75,18 @@ non-demo refusal remains in place. The next delivery requires architect review.
 
 ## Launcher and validator integration requirements
 
-`JobControl.run` now uses `python -I -c` for its **trusted parent launcher only**.
+`JobControl.run` uses `python -I` for its **trusted parent supervisor only**.
 Without `-I`, top-level `subprocess.py` or `threading.py` in an untrusted cwd runs
 before the child reaches sandbox-exec. The child argv and its explicit environment
 are unchanged. A marker regression verifies the child runs without importing
 either shadow module.
+
+The supervisor now starts the command as its own session leader and externally
+monitors engine liveness. This also prevents a single imported validation process
+from escaping cancellation with `setsid` (which fork denial alone does not stop).
+The supervisor escalates TERM to KILL and reaps the command before returning.
+Trusted demo/agent commands are not sandboxed by this change and retain subprocess
+and stdin-payload support. No public JobControl or adapter signature changes.
 
 When imported Runtime execution is added, wrap the **entire Popen argv**, including
 Runtime's Python launcher, not just uvicorn's inner command. Do not remove the

@@ -50,7 +50,7 @@ class JobControl:
         if process.poll() is None:
             self.signal_process(process, signal.SIGTERM)
             try:
-                process.wait(timeout=1)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
         self.signal_process(process, signal.SIGKILL)
@@ -65,15 +65,10 @@ class JobControl:
         self.check()
         with log_path.open("ab") as output:
             death_read, death_write = os.pipe()
-            launcher = (
-                "import os,signal,subprocess,sys,threading; "
-                "signal.signal(signal.SIGTERM,lambda *args: None); "
-                "threading.Thread(target=lambda: (os.read(int(sys.argv[1]),1), os.killpg(os.getpgrp(),signal.SIGKILL)),daemon=True).start(); "
-                "sys.exit(subprocess.call(sys.argv[2:]))"
-            )
             try:
                 process = subprocess.Popen(
-                    [sys.executable, "-I", "-c", launcher, str(death_read), *command],
+                    [sys.executable, "-I", str(Path(__file__).with_name("runtime_supervisor.py")),
+                     "--job", str(death_read), *command],
                     cwd=cwd, env=environment or scrubbed_environment(),
                     stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True, pass_fds=(death_read,),

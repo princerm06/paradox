@@ -52,3 +52,23 @@ re-execing a TERM-resistant state writer, then close, switch projects or revoke
 trust. Crash, boot cancellation and unhealthy-start timeout tests also verify the
 application dies and runtime temporary data is removed. Final counts and the
 release decision are recorded in `docs/m2-projects-api.md` after the final gates.
+
+## Validation supervision
+
+Fork denial alone is not sufficient for validation: a sandboxed process sharing
+its launcher's session could detach itself with `setsid()` without forking. All
+JobControl commands therefore use the same trusted isolated supervisor, and each
+command starts as its own session leader. The kernel then rejects both `setsid`
+and changing that leader's process group; approved-interpreter exec retains those
+properties. An engine-owned, separately inherited pipe is monitored by the trusted
+supervisor only. Cancellation, timeout and engine death TERM/KILL the command's
+session-leading process group and reap it. This does not apply the application
+sandbox to trusted jobs or agents: their original argv, environment, stdin payload,
+stdout and ability to create subprocesses remain available. JobControl's public
+call signature is unchanged. A separate trusted-job test verifies subprocess
+creation and input payload delivery still work.
+
+New hostile JobControl tests re-exec a TERM-resistant state writer, assert session
+and process-group escape fail, and prove PID termination plus stable state after
+cancel, timeout and engine-pipe EOF. Runtime processes use the same supervisor but
+keep application stdin separate from the engine-liveness channel.

@@ -23,8 +23,17 @@ def terminate(child):
 
 
 def supervise(arguments):
-    listener, status, code = arguments[:3]
-    listener, status = int(listener), int(status)
+    if arguments[0] == "--job":
+        control = int(arguments[1])
+        listener = status = code = None
+        command = arguments[2:]
+        standard_input = None
+    else:
+        listener, status, code = arguments[:3]
+        listener, status = int(listener), int(status)
+        control = 0
+        command = arguments[3:]
+        standard_input = subprocess.DEVNULL
     stopping = False
 
     def stop(signum, frame):
@@ -35,16 +44,17 @@ def supervise(arguments):
     signal.signal(signal.SIGINT, stop)
     child = None
     try:
-        child = subprocess.Popen(arguments[3:], cwd=code, stdin=subprocess.DEVNULL,
-                                 start_new_session=True, pass_fds=(listener,))
-        os.close(listener)
-        os.write(status, (str(child.pid) + "\n").encode("ascii"))
-        os.close(status)
+        child = subprocess.Popen(command, cwd=code, stdin=standard_input,
+                                 start_new_session=True, pass_fds=(listener,) if listener is not None else ())
+        if listener is not None:
+            os.close(listener)
+            os.write(status, (str(child.pid) + "\n").encode("ascii"))
+            os.close(status)
         with selectors.DefaultSelector() as selector:
-            selector.register(0, selectors.EVENT_READ)
+            selector.register(control, selectors.EVENT_READ)
             while not stopping and child.poll() is None:
                 if selector.select(.1):
-                    os.read(0, 1)
+                    os.read(control, 1)
                     stopping = True
     finally:
         if child is not None:

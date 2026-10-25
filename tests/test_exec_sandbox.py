@@ -206,9 +206,18 @@ def test_signals_restricted_to_same_sandbox(run):
 def test_external_control_stops_sandboxed_process_group(run, mode):
     control = JobControl()
     ready = run / "state/child.pid"
-    child_source = ("import pathlib,os,time; pathlib.Path(%r).write_text(str(os.getpid())); time.sleep(30)"
-                    % str(ready))
-    source = ASSERT_ENV + child_source
+    marker = run / "state/tick"
+    child_source = (
+        "import pathlib,os,time,signal; signal.signal(signal.SIGTERM,signal.SIG_IGN); exec(%r); "
+        "pathlib.Path(%r).write_text(str(os.getpid())); exec(%r)"
+    ) % (
+        "for detach in [os.setsid, lambda: os.setpgid(0,0)]:\n"
+        " try:\n  detach()\n except OSError as error:\n  assert error.errno in (1,13)\n"
+        " else:\n  raise AssertionError('supervised session escaped')",
+        str(ready),
+        "while True:\n pathlib.Path(%r).write_text(str(time.monotonic_ns()))\n time.sleep(.05)" % str(marker),
+    )
+    source = ASSERT_ENV + "import sys; os.execv(sys.executable,[sys.executable,'-I','-c',%r])" % child_source
     command = exec_sandbox.wrap([sys.executable, "-c", source], [run / "state", run / "tmp"], run)
     errors = []
 
@@ -242,9 +251,76 @@ def test_external_control_stops_sandboxed_process_group(run, mode):
             time.sleep(0.05)
         else:
             pytest.fail("Sandboxed worker survived process-group cleanup")
+        previous = marker.read_bytes()
+        time.sleep(.15)
+        assert marker.read_bytes() == previous
     finally:
         control.cancel()
         thread.join(timeout=5)
+
+
+def test_job_engine_death_stops_reexec_writer(run):
+    import json
+    import selectors
+    import signal
+    from engine.jobs import scrubbed_environment
+    ready = run / "state/job.pid"
+    marker = run / "state/job-tick"
+    source = (
+        "import os,pathlib,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "pathlib.Path(%r).write_text(str(os.getpid())); exec(%r)"
+    ) % (str(ready), "while True:\n pathlib.Path(%r).write_text(str(time.monotonic_ns()))\n time.sleep(.05)" % str(marker))
+    source = "import os,sys; os.execv(sys.executable,[sys.executable,'-I','-c',%r])" % source
+    script = '''
+import json, pathlib, threading, time
+from engine.adapters import exec_sandbox
+from engine.jobs import JobControl
+import sys
+root = pathlib.Path(%r)
+control = JobControl()
+command = exec_sandbox.wrap([sys.executable, '-I', '-c', %r], [root/'state',root/'tmp'], root)
+threading.Thread(target=lambda: control.run(command,root/'code',root/'tmp/job.log',60,
+                 exec_sandbox.environment({},root/'tmp'))).start()
+while not (root/'state/job.pid').exists():
+    time.sleep(.02)
+with control.lock:
+    monitor = next(iter(control.processes)).pid
+print(json.dumps(dict(monitor=monitor, app=int((root/'state/job.pid').read_text()))), flush=True)
+time.sleep(60)
+''' % (str(run), source)
+    parent = subprocess.Popen([sys.executable, '-u', '-c', script], cwd=Path(__file__).resolve().parents[1],
+                              env=scrubbed_environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    started = {}
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(parent.stdout, selectors.EVENT_READ)
+            assert selector.select(15), "Trusted job launcher failed to initialize"
+        started = json.loads(parent.stdout.readline())
+        parent.kill()
+        parent.wait(timeout=5)
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            records = subprocess.run(['/bin/ps','-o','stat=','-p',str(started['monitor'])+','+str(started['app'])],
+                                     env=scrubbed_environment(), capture_output=True, text=True).stdout.split()
+            if not records or all(record.startswith('Z') for record in records):
+                break
+            time.sleep(.05)
+        else:
+            pytest.fail('Validation writer or supervisor survived engine death')
+        previous = marker.read_bytes()
+        time.sleep(.15)
+        assert marker.read_bytes() == previous
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        parent.wait(timeout=5)
+        parent.stdout.close()
+        parent.stderr.close()
+        for pid in started.values():
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_unapproved_binaries_cannot_execute(run):

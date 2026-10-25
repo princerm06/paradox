@@ -216,3 +216,13 @@ failures in this gate. A final two-test delta passes in 3.66s, including malform
 configured trust-root handling: one symlink-loop entry is skipped with a code-only
 warning while the valid root and bundled demo remain usable. The full offline
 regression result will be added after it completes on this security commit.
+
+A subsequent review found that a validation process could call `setsid()` without
+creating a child. JobControl now uses the trusted external supervisor and starts
+commands as session leaders. The updated helper/runtime/validation gate passes
+69 tests in 66.99s; the two launcher tests (including trusted stdin and subprocess
+compatibility) pass in 0.45s. Cancellation, timeout and engine-death tests replace
+the interpreter, ignore TERM, reject session/group escape, and verify the writer
+has stopped. The pre-fix full run was intentionally interrupted at 235 passed / 4
+skipped / 1 deselected; **it is not a final full-suite result**. Final regression
+must run with both supervision changes integrated.
