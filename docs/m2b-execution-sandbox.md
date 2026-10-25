@@ -37,6 +37,14 @@ non-demo refusal remains in place. The next delivery requires architect review.
   and remote-loopback outbound rules. The unsafe `allow network* (local ip ...)`
   shortcut is not used. Localhost is not a trust boundary: engine auth is still
   required and this does not protect another unauthenticated localhost service.
+- Mach service lookup and user-preference reads are denied, with no Mach service
+  exceptions. This prevents brokering access through pasteboard, SecurityServer,
+  securityd, LaunchServices, cfprefsd, WindowServer or mDNSResponder/DNS services.
+  Network denial alone did not close these brokered channels. The availability
+  probe checks pasteboard lookup denial; regressions check all these services,
+  including `com.apple.dnssd.service`. Name resolution is unavailable, even for
+  `localhost`: imported applications, tests and health probes must use numeric
+  `127.0.0.1`. Adding a Mach allowance requires separate architect approval.
 - `process-info*` is denied except self. That alone did **not** block reading the
   parent's environment through ctypes and numeric `sysctl(KERN_PROCARGS2)` in
   testing. Default-deny `sysctl-read` closes that tested vector. The only read
@@ -120,6 +128,9 @@ sandbox review, project trust/import lifecycle, complete Runtime wrapping,
 generation integration, restart/cancellation and cross-future isolation tests.
 This is a macOS-only sandbox, not a VM or a proof against every kernel/native
 exploit; no CPU/RAM quota or protection from other localhost services is claimed.
+The profile still starts with `allow default` and explicit restrictions. A later
+hardening pass should consider `deny default` with an audited operation allowlist;
+that conversion is not part of this reviewed change.
 
 ## Verification
 
@@ -136,6 +147,11 @@ python -m pytest -q tests/test_engine.py tests/test_generations.py \
   -k 'not test_live_droid_generation_records_a_complete_result'
 # 104 passed in 145.48s
 ```
+
+After the Mach-service review fix, the same focused command passes **84 tests in
+23.55s**, including the eight denied Mach-service lookups and failed external /
+localhost name resolution. Compileall, pytest, SQLite, platform/cpu queries,
+uvicorn and its numeric-loopback health probe pass under the final profile.
 
 No paid or live model calls, original-repository execution, UI changes, pushes,
 or merges occurred. The full suite is not duplicated here while Codex 1 runs

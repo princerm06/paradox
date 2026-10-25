@@ -80,6 +80,29 @@ def test_state_writes_and_loopback_work(run):
     assert (run / "state/nested.db").exists()
 
 
+@pytest.mark.parametrize("service", [
+    "com.apple.pasteboard.1", "com.apple.SecurityServer", "com.apple.securityd.xpc",
+    "com.apple.coreservices.launchservicesd", "com.apple.cfprefsd.agent",
+    "com.apple.cfprefsd.daemon", "com.apple.windowserver.active", "com.apple.dnssd.service",
+])
+def test_mach_service_lookup_denied(run, service):
+    result = execute(run,
+        "import ctypes; library=ctypes.CDLL(None); "
+        "bootstrap=ctypes.c_uint.in_dll(library,'bootstrap_port'); port=ctypes.c_uint(); "
+        "result=library.bootstrap_look_up(bootstrap,%r,ctypes.byref(port)); "
+        "assert result==1100, 'Mach service lookup was not denied'" % service.encode())
+    assert result.returncode == 0, result.stderr
+
+
+def test_dns_resolution_unavailable(run):
+    result = execute(run, "import socket; exec(%r)" % (
+        "for host in ['localhost','example.com']:\n"
+        " try:\n  socket.getaddrinfo(host,80)\n"
+        " except (socket.gaierror,PermissionError):\n  pass\n"
+        " else:\n  raise AssertionError('name resolution available')\n"))
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("operation", [
     "open(%r,'w').write('bad')",
     "open(%r).read()",

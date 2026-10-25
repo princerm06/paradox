@@ -88,6 +88,7 @@ def _command(argv: Sequence[str], writable: Sequence[Path], run_root: Path) -> L
         "(version 1)", "(allow default)",
         "(deny file-read*)", "(deny file-write*)", "(deny process-exec)",
         "(deny network*)",
+        "(deny mach-lookup)", "(deny user-preference-read)",
         "(deny process-info*)", "(allow process-info* (target self))",
         "(deny sysctl-read)",
         '(allow sysctl-read (sysctl-name "kern.ostype") (sysctl-name "kern.hostname") (sysctl-name "kern.osrelease") (sysctl-name "kern.version") (sysctl-name "hw.machine") (sysctl-name "hw.ncpu"))',
@@ -141,6 +142,11 @@ def availability_reason() -> Optional[str]:
                 "assert library.sysctl(mib,3,buffer,ctypes.byref(size),None,0)==-1 "
                 "and ctypes.get_errno() in (1,13)"
             ) % os.getpid()
+            probe += (
+                "; bootstrap=ctypes.c_uint.in_dll(library,'bootstrap_port'); "
+                "service=ctypes.c_uint(); "
+                "assert library.bootstrap_look_up(bootstrap,b'com.apple.pasteboard.1',ctypes.byref(service))==1100"
+            )
             result = subprocess.run(
                 _command([sys.executable, "-c", probe], [writable], root),
                 cwd=root, env=environment({}, writable), stdin=subprocess.DEVNULL,
