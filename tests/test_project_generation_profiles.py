@@ -198,7 +198,7 @@ def test_isolated_pytest_tooling_cannot_be_shadowed(tmp_path, collect):
     tests = code / 'tests'
     tests.mkdir(parents=True)
     marker = tmp_path / 'shadow-imported'
-    for name in ('pytest.py', 'compileall.py', 'threading.py', 'subprocess.py', 'xml.py'):
+    for name in ('pytest.py', 'compileall.py', 'json.py', 'threading.py', 'subprocess.py', 'xml.py'):
         (code / name).write_text('from pathlib import Path\nPath(' + repr(str(marker)) + ').touch()\nraise RuntimeError("shadow")\n')
     (tests / 'test_failure.py').write_text('def test_failure():\n    assert False, "real-test-ran"\n')
     report = tmp_path / ('collection.json' if collect else 'tests.xml')

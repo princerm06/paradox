@@ -101,6 +101,18 @@ counts without executing the notes application. They are not sandbox or imported
 runtime acceptance evidence. The pre-rebase full run was stopped: it does not
 count toward the required rebased full-suite gate.
 
+Rebased full offline suite at `8468f2c`: **355 passed, 1 skipped, 1 deselected**
+in 396.45 seconds (Python 3.9.6). Command:
+
+```sh
+env -u FACTORY_API_KEY -u PARADOX_TOKEN -u PARADOX_SHELL_TOKEN -u ANTHROPIC_API_KEY \
+  .venv/bin/python -m pytest -q -k 'not live_droid'
+```
+
+The subsequent test-only follow-up adds `json.py` to the shadow-marker cases;
+its focused module passes **29 tests in 2.54 seconds**. The full-suite result
+belongs to `8468f2c`, not that later commit.
+
 Sandbox helper review, launcher `-I` integration, credential-fix merge and project
 lifecycle integration remain prerequisites for imported execution. Tests execute
 in-process with pytest; hostile application code could still forge test reports.
