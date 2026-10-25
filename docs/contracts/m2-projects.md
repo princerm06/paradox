@@ -218,6 +218,51 @@ Errors (in addition to M1's):
   - guard failure (edits an existing test, or a dependency manifest)
   - slow and cancellable
 
+## Lane interfaces (Python, frozen)
+
+These are the only cross-lane call points. Everything else is private to its owner.
+
+```python
+# engine/adapters/exec_sandbox.py (Codex 2)
+def availability_reason() -> Optional[str]                    # None means usable. Otherwise operations fail closed with 503.
+def wrap(argv: Sequence[str], writable: Sequence[Path], run_root: Path) -> List[str]
+    # sandbox-exec argv. Reads allowed: run_root, venv site-packages, interpreter prefix.
+    # writable: existing dirs become subpath rules, existing files become literal rules. Nothing else.
+def environment(base: Mapping[str, str], run_tmp: Path) -> Dict[str, str]
+    # base + PYTHONPATH (venv site-packages and cwd), TMPDIR, PYTHONPYCACHEPREFIX, HOME=run_tmp.
+
+# engine/adapters/fastapi_sqlite.py (Codex 2)
+ADAPTER: ProjectAdapter                                       # id "fastapi-sqlite-v1". See base.py.
+
+# Constructors (Codex 2). The default profile keeps the demo byte-identical.
+Engine(root, demo_source, runtime_port, profile: ProjectProfile = DEMO_PROFILE)   # engine.profile
+Runtime(root, port=8001, environment=None, control=None, profile=DEMO_PROFILE)
+    # For "sandboxed" profiles, start() launches via wrap(): writable = [workspace/state, run tmp].
+    # Health probe uses profile.health_path.
+Generations(engine)                                           # reads engine.profile. adopt() unchanged in shape.
+
+# Codex 1. Each takes the profile explicitly, and DEMO_PROFILE reproduces today's behaviour.
+guard(base, current, changed, profile)
+baseline_test_count(directory, base, control, log, profile)
+validate_runtime(directory, code, base_state, control, log, record_check, profile)
+    # Builds its Runtime with the same profile, so sandboxing comes from Runtime.
+Providers.run(provider, prompt, code, control, log, profile)  # rejects providers not in profile.providers
+    # Recipe filter: the "adapter" key must equal profile.adapter (no key means demo-v0); "requires" files must exist.
+# run(): compile and pytest commands go through exec_sandbox.wrap/environment when profile.execution == "sandboxed".
+#   writable = [test-state dir, exact report file, run tmp]. code/ is never writable.
+
+# engine/projects (Codex 2)
+class Projects:                                               # one per app, owns per-project Engine and Generations
+    def list(self) -> List[dict]; def get(self, pid) -> dict
+    def create(self, repository_id) -> dict                   # import (§ Import), atomic
+    def open(self, pid) -> dict; def close(self, pid) -> dict  # at most one open
+    def delete(self, pid) -> None
+    def engine(self, pid) -> Tuple[Engine, Generations]       # used by the mirrored routes
+    def revoke(self, repository_id) -> None                   # close runtime, cancel generations, status unavailable
+```
+
+Mirrored routes reuse the existing handler bodies with the project's `(Engine, Generations)` instead of the app-level pair. Project state lives in `<state>/projects/<pid>/` with its own `engine.lock`-free sub-tree. The app-level engine lock covers it, and each project `Engine` has its own `Gate`.
+
 ## Disposable fixture project
 
 `tests/fixtures/projects/build.py::build_notes_repo(tmp_path) -> Path` (Codex 1) creates a fresh Git repository at test time. Nothing with a nested `.git` is committed. The repository contains:
